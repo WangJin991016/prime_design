@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="glass-laboratory">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>批量引物设计</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <div><h1>批量引物设计</h1><p>Primer3 设计 · UCSC 本地 isPCR/BLAT 验证</p></div>
+    <div class="header-actions">
+      <button id="exitButton" class="header-button" type="button">退出软件</button>
+      <div><div id="serverState" class="badge">正在连接…</div><div id="exitState" class="header-note" role="status"></div></div>
+    </div>
+  </header>
+  <main>
+    <section class="panel system-panel">
+      <div class="section-title">
+        <div><h2>系统检查</h2><p class="muted">本地检查不会连接服务器；远程检查仅在点击后执行。</p></div>
+        <div class="actions"><button id="refreshLocalCheck" type="button">刷新本地检查</button><button id="checkRemote" type="button">检查服务器</button></div>
+      </div>
+      <div id="systemChecks" class="check-grid" aria-live="polite"></div>
+    </section>
+
+    <section class="panel">
+      <h2>1. 提交 multi-FASTA</h2>
+      <div class="fields three">
+        <label>批次名称<input id="batchName" value="primer_batch" maxlength="80"></label>
+        <label>本批统一基因组
+          <select id="batchAssembly" required><option value="">必须手动选择</option></select>
+        </label>
+        <label>选择 FASTA 文件<input id="fastaFile" type="file" accept=".fa,.fasta,.fna,.txt,text/plain"></label>
+      </div>
+      <label>或直接粘贴 FASTA<textarea id="fastaText" rows="12" spellcheck="false" placeholder=">target_001 描述&#10;ACGT..."></textarea></label>
+      <div class="actions"><button id="previewButton" class="primary" type="button">解析并预览</button><span id="previewSummary"></span></div>
+      <ul id="errors" class="errors" aria-live="polite"></ul>
+    </section>
+
+    <section id="primer3Parameters" class="panel">
+      <div class="section-title">
+        <div><h2>2. Primer3 参数</h2><p class="muted">每个新批次从 Primer3 默认值开始，提交后参数会写入该批次快照。</p></div>
+        <button id="resetPrimer3Parameters" type="button">恢复默认参数</button>
+      </div>
+      <div class="parameter-grid">
+        <fieldset>
+          <legend>候选与温度</legend>
+          <label>每条 FASTA 返回的候选引物对总数（含首选）<input id="numReturn" type="text" inputmode="numeric" autocomplete="off" value="5"></label>
+          <div class="two-fields">
+            <label>Tm 目标（°C）<input id="tmTargetC" type="text" inputmode="decimal" autocomplete="off" value="60"></label>
+            <label>Tm 容差（±°C）<input id="tmToleranceC" type="text" inputmode="decimal" autocomplete="off" value="5"></label>
+          </div>
+          <output id="tmRange" class="range-readout" aria-live="polite">允许范围：55–65°C</output>
+        </fieldset>
+        <fieldset>
+          <legend>引物长度（bp）</legend>
+          <div class="three-fields">
+            <label>最小<input id="primerLengthMin" type="text" inputmode="numeric" autocomplete="off" value="18"></label>
+            <label>最适<input id="primerLengthOpt" type="text" inputmode="numeric" autocomplete="off" value="23"></label>
+            <label>最大<input id="primerLengthMax" type="text" inputmode="numeric" autocomplete="off" value="28"></label>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>产物长度（bp）</legend>
+          <div class="two-fields">
+            <label>最小<input id="productSizeMin" type="text" inputmode="numeric" autocomplete="off" value="80"></label>
+            <label>最大<input id="productSizeMax" type="text" inputmode="numeric" autocomplete="off" value="1000"></label>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>基因组特异性验证（isPCR）</legend>
+          <label>基因组产物最大长度（bp）
+            <input id="validationMaxProductSize" type="text" inputmode="numeric" autocomplete="off" value="10000">
+          </label>
+          <p class="muted">验证范围固定从 0 bp 开始；默认扫描到 10,000 bp，与上方 Primer3 模板设计范围相互独立。</p>
+        </fieldset>
+        <fieldset>
+          <legend>GC 含量（%）</legend>
+          <div class="two-fields">
+            <label>最小<input id="gcMinPercent" type="text" inputmode="decimal" autocomplete="off" value="40"></label>
+            <label>最大<input id="gcMaxPercent" type="text" inputmode="decimal" autocomplete="off" value="60"></label>
+          </div>
+        </fieldset>
+      </div>
+    </section>
+
+    <section id="previewPanel" class="panel hidden">
+      <h2>3. 核对序列名称</h2>
+      <div class="table-wrap"><table><thead><tr><th>内部 ID</th><th>显示名称</th><th>长度</th><th>检查</th></tr></thead><tbody id="previewBody"></tbody></table></div>
+      <div class="actions"><button id="runButton" class="primary" type="button" disabled>创建并开始设计</button><span id="candidateSummary">每条 FASTA 最多返回 5 对候选引物（含排名第 1 的首选对）。</span></div>
+    </section>
+
+    <section id="progressPanel" class="panel hidden">
+      <h2>4. 运行进度</h2>
+      <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progressBar"></div></div>
+      <p id="progressText"></p>
+      <div id="recordProgress"></div>
+      <div class="actions"><button id="retryButton" class="hidden" type="button">从断点重试</button><div><a id="reportLink" class="button hidden" target="_blank">打开完整报告</a> <button id="previewReportButton" class="hidden" type="button">页面内预览</button></div></div>
+      <iframe id="reportFrame" class="hidden" title="引物设计报告"></iframe>
+    </section>
+
+    <section class="panel">
+      <div class="section-title"><h2>历史批次</h2><button id="refreshHistory" type="button">刷新</button></div>
+      <div id="history"></div>
+    </section>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

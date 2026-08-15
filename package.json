@@ -1,0 +1,16 @@
+{
+  "name": "prime-design",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "description": "Local web app for batch Primer3 design and server-side UCSC validation",
+  "scripts": {
+    "app": "node src/app.mjs",
+    "build:portable": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Build-PortableApp.ps1",
+    "test": "node --test",
+    "help": "node src/cli.mjs help"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

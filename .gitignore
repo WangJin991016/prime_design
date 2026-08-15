@@ -1,0 +1,51 @@
+# Local runtime data and scientific results
+/archive/
+/backups/
+/batches/
+/cache/
+/exports/
+/incoming/
+/logs/
+/runs/
+
+# Build outputs and bundled third-party runtimes
+/.build-temp/
+/.test-runtime/
+/dist/
+/vendor/
+/bin/
+**/bin/
+**/obj/
+
+# Machine-specific configuration
+/config/default.json
+/config/local.json
+.env
+.env.*
+!.env.example
+
+# Credentials and private keys must never be committed
+*.pem
+*.key
+*.pfx
+*.p12
+id_rsa*
+id_ed25519*
+
+# Local one-off calibration artifacts
+/hs1.fa
+
+# Generated binaries, archives, and logs
+*.exe
+*.dll
+*.pdb
+*.zip
+*.tar.gz
+*.log
+
+# Editor and operating-system files
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/

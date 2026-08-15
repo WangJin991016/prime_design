@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "primer3": {
+    "parameters": {
+      "numReturn": 5,
+      "primerLengthMin": 18,
+      "primerLengthOpt": 23,
+      "primerLengthMax": 28,
+      "tmMinC": 55,
+      "tmOptC": 60,
+      "tmMaxC": 65,
+      "productSizeMin": 80,
+      "productSizeMax": 1000,
+      "gcMinPercent": 40,
+      "gcMaxPercent": 60,
+      "explain": true
+    },
+    "server": {
+      "hostAlias": "YOUR_SSH_ALIAS",
+      "sshConfigPath": "C:\\Users\\YOUR_NAME\\.ssh\\config",
+      "remoteRoot": "/home/YOUR_USER/workspace/Codex_workspace/prime_design",
+      "slurmScript": "/home/YOUR_USER/workspace/Codex_workspace/prime_design/jobs/run-primer3.slurm",
+      "provisionScript": "/home/YOUR_USER/workspace/Codex_workspace/prime_design/jobs/provision-primer3.slurm",
+      "timeoutMs": 7200000,
+      "expectedVersion": "2.6.1",
+      "expectedSourceSha256": "c981e42765ceb525f56607c6a7cf989ac5068483731c6e083b1e9fb22816463b",
+      "expectedToolSha256": "855e96f911eff7407867a71af1babd9b821b8c8c1e8709e7a5ae762281d42fa6",
+      "expectedConfigTreeSha256": "0bc26143d81bc51afa3e797a7ee6bf1e74b77f17ae90348f6718f0f6e1595519"
+    }
+  },
+  "ucsc": {
+    "mode": "server",
+    "baseUrl": "https://genome.ucsc.edu",
+    "assemblies": [
+      "mm10",
+      "hg38",
+      "hs1"
+    ],
+    "target": "genome",
+    "minProductSize": 0,
+    "maxProductSize": 10000,
+    "minPerfect": 15,
+    "minGood": 15,
+    "flipReverse": false,
+    "includeBlatReview": true,
+    "isPcrServer": {
+      "hostAlias": "YOUR_SSH_ALIAS",
+      "sshConfigPath": "C:\\Users\\YOUR_NAME\\.ssh\\config",
+      "remoteRoot": "/home/YOUR_USER/workspace/Codex_workspace/prime_design",
+      "slurmScript": "/home/YOUR_USER/workspace/Codex_workspace/prime_design/jobs/run-ispcr.slurm",
+      "timeoutMs": 7200000,
+      "expectedIsPcrSha256": "3ecc5dc406a4730ee7b9cf09ec6be9fbc13ea4dca62add2b06ac6e39e1d00294",
+      "expectedBlatSha256": "0760637effca2487418336f23e487a06789f146a968cd9265b4df85b2c1ff7f0",
+      "expectedIsPcrVersion": "v385",
+      "expectedBlatVersion": "v385",
+      "expectedProvisionManifestSha256": "8ba825ef93b2b840b4c981207cfd633cf2a8ab1ff425258022a7f19681ef935d",
+      "expectedRunScriptSha256": "0daf4a31478db807b585ca94ed16d3089e9cb88f77469a522516c936f4d10a1a",
+      "expectedDatabaseSha256": {
+        "mm10": "4de06ca0bfca5417ae3782c09cf2caf7afc97c190172f60dc07b783f1bc6f39d",
+        "hg38": "1f67aaa17a77b327738fe750ab37430a85dddf73c7d9189385ad1839259acec0",
+        "hs1": "cc9de47ce524d49fb7b85bbd915d50e2a3d3c7ca5bfbc1f8f155fa339e4044cf"
+      },
+      "supportedAssemblies": [
+        "mm10",
+        "hg38",
+        "hs1"
+      ]
+    }
+  }
+}

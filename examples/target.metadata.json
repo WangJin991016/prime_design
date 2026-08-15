@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "fasta": "target.fasta",
+  "sequenceId": "example_target",
+  "generator": "xorshift32-low2",
+  "seed": 20260809,
+  "length": 4000,
+  "gcCount": 1995,
+  "gcPercent": 49.88
+}
