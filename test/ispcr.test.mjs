@@ -5,15 +5,18 @@ import {
   ISPCR_WEB_CONSTRAINTS,
   buildBlatPrimerFasta,
   buildIsPcrQuery,
+  buildRoundRobinShardPlan,
   buildSbatchRemoteArgs,
   makeRemoteRunId,
   parseBlatPsl,
   parseIsPcrBed,
   parseKeyValueTsv,
   parseResultManifest,
+  parseRemoteProgressStatus,
   normalizeIsPcrWebParameters,
   resultMatchesIsPcrParameters,
   validateIsPcrServerConfig,
+  waitForIsPcrSlurmCompletion,
   waitForSlurmCompletion,
 } from '../src/lib/ispcr.mjs';
 
@@ -40,12 +43,82 @@ test('Slurm polling exposes job progress and fails closed on terminal errors', a
 
 test('web isPCR validation defaults to 0-10000 bp with a bounded adjustable maximum', () => {
   assert.equal(DEFAULT_ISPCR_WEB_PARAMETERS.maxProductSize, 10000);
+  assert.equal(DEFAULT_ISPCR_WEB_PARAMETERS.parallelism, 4);
   assert.equal(ISPCR_WEB_CONSTRAINTS.minProductSize, 0);
-  assert.deepEqual(normalizeIsPcrWebParameters({}), { minProductSize: 0, maxProductSize: 10000 });
-  assert.deepEqual(normalizeIsPcrWebParameters({ maxProductSize: 50000 }), { minProductSize: 0, maxProductSize: 50000 });
+  assert.deepEqual(normalizeIsPcrWebParameters({}), { minProductSize: 0, maxProductSize: 10000, parallelism: 4 });
+  assert.deepEqual(normalizeIsPcrWebParameters({ maxProductSize: 50000, parallelism: 8 }), { minProductSize: 0, maxProductSize: 50000, parallelism: 8 });
   assert.throws(() => normalizeIsPcrWebParameters({ maxProductSize: 999 }), /between 1000 and 50000/);
   assert.throws(() => normalizeIsPcrWebParameters({ maxProductSize: 10000.5 }), /integer/);
+  for (const parallelism of [3, 9, 4.5, '4', null]) {
+    assert.throws(() => normalizeIsPcrWebParameters({ maxProductSize: 10000, parallelism }), /parallelism/);
+  }
   assert.throws(() => normalizeIsPcrWebParameters({ maxProductSize: 10000, extra: true }), /unknown fields/);
+});
+
+test('round-robin shard plans are complete, unique, balanced, and bounded by candidate count', () => {
+  for (const count of [1, 5, 6, 7, 30, 400]) {
+    const ids = Array.from({ length: count }, (_, index) => `pair-${index + 1}`);
+    const plan = buildRoundRobinShardPlan(ids, 4);
+    assert.equal(plan.actualParallelism, Math.min(4, count));
+    assert.deepEqual(plan.shards.flat().sort(), [...ids].sort());
+    assert.equal(new Set(plan.shards.flat()).size, count);
+    const sizes = plan.shards.map((shard) => shard.length);
+    assert.ok(Math.max(...sizes) - Math.min(...sizes) <= 1);
+  }
+  assert.deepEqual(buildRoundRobinShardPlan(
+    Array.from({ length: 30 }, (_, index) => `pair-${index + 1}`), 4,
+  ).shards.map((shard) => shard.length), [8, 8, 7, 7]);
+});
+
+test('remote progress status validates phases, counters, and run identity', () => {
+  const payload = [
+    'slurmState\tRUNNING', 'progressBegin', 'key\tvalue', 'schemaVersion\t1',
+    'runId\trun-1', 'phase\tispcr', 'assembly\tmm10', 'candidateTotal\t30',
+    'candidateCompleted\t8', 'shardTotal\t4', 'shardCompleted\t1', 'activeWorkers\t3',
+    'configuredParallelism\t4', 'actualParallelism\t4', 'blatCandidateTotal\t0',
+    'updatedAtUtc\t2026-08-18T12:00:00Z', 'progressEnd', '',
+  ].join('\n');
+  const parsed = parseRemoteProgressStatus(payload, 'run-1');
+  assert.equal(parsed.slurmState, 'RUNNING');
+  assert.deepEqual(
+    [parsed.progress.candidateCompleted, parsed.progress.candidateTotal, parsed.progress.activeWorkers],
+    [8, 30, 3],
+  );
+  assert.throws(() => parseRemoteProgressStatus(payload.replace('run-1', 'wrong'), 'run-1'), /不一致/);
+  assert.throws(() => parseRemoteProgressStatus(payload.replace('candidateCompleted\t8', 'candidateCompleted\t31'), 'run-1'), /范围/);
+});
+
+test('parallel isPCR polling uses one SSH call per sample and reports monotonic shard progress', async () => {
+  const samples = [
+    ['RUNNING', 0, 0, 4],
+    ['RUNNING', 8, 1, 3],
+    ['COMPLETED', 30, 4, 0],
+  ];
+  let calls = 0;
+  const seen = [];
+  const progressServer = validateIsPcrServerConfig({
+    hostAlias: 'server', remoteRoot: '/safe/root',
+    slurmScript: '/safe/root/jobs/run-ispcr-parallel-v2.slurm',
+    supportedAssemblies: ['mm10'], progressProtocol: 'parallel_v1',
+  });
+  await waitForIsPcrSlurmCompletion({
+    server: progressServer, jobId: '123', runId: 'run-1', timeoutMs: 1000, pollMs: 0,
+    runner: async () => {
+      calls += 1;
+      const [state, candidateCompleted, shardCompleted, activeWorkers] = samples.shift();
+      return { stdout: [
+        `slurmState\t${state}`, 'progressBegin', 'key\tvalue', 'schemaVersion\t1',
+        'runId\trun-1', 'phase\tispcr', 'assembly\tmm10', 'candidateTotal\t30',
+        `candidateCompleted\t${candidateCompleted}`, 'shardTotal\t4',
+        `shardCompleted\t${shardCompleted}`, `activeWorkers\t${activeWorkers}`,
+        'configuredParallelism\t4', 'actualParallelism\t4', 'blatCandidateTotal\t0',
+        'updatedAtUtc\t2026-08-18T12:00:00Z', 'progressEnd', '',
+      ].join('\n'), stderr: '' };
+    },
+    onProgress: async (value) => seen.push(value.candidateCompleted),
+  });
+  assert.equal(calls, 3);
+  assert.deepEqual(seen, [0, 8, 30]);
 });
 
 test('cached isPCR results are reusable only when every validation parameter matches', () => {
@@ -196,6 +269,7 @@ test('server config and sbatch arguments keep untrusted data out of a shell', ()
   assert.equal(args[args.indexOf('sbatch') + 1], '--wait');
   assert.match(args.find((value) => value.startsWith('--export=')), /PRIME_RUN_ID=run-001/);
   assert.match(args.find((value) => value.startsWith('--export=')), /PRIME_ASSEMBLIES=hg38/);
+  assert.match(args.find((value) => value.startsWith('--export=')), /PRIME_PARALLELISM=4/);
   assert.equal(args.at(-1), server.slurmScript);
   assert.throws(() => buildSbatchRemoteArgs({
     server,

@@ -1,6 +1,6 @@
 {
   "name": "prime-design",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "description": "Local web app for batch Primer3 design and server-side UCSC validation",

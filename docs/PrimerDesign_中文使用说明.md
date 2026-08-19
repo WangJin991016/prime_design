@@ -1,6 +1,6 @@
 # PrimerDesign 中文使用说明
 
-适用版本：`0.4.0`
+适用版本：`0.5.0`
 运行环境：Windows x64，本机个人使用  
 默认数据目录：`A:\CodexProject\prime_design`
 
@@ -125,6 +125,7 @@ ATGCGTACCGTAGCTAGCTAGCGGATCCGATCGATCGGCTAGCTAGCATCGATCGA
 | 模板产物长度 | 80–1000 bp | 正整数；最小 ≤ 最大 | 在输入 FASTA 模板上设计的理论产物范围 |
 | GC 含量 | 40–60% | 0–100%；最小 ≤ 最大 | 单条引物的 GC 硬约束 |
 | isPCR 基因组产物最大长度 | 10,000 bp | 1,000–50,000 的整数 | 在基因组上搜索成对产物的最大长度；最小值固定为 0 bp |
+| isPCR 并行任务数 | 4 | 4–8 的整数 | 候选按 round-robin 分片；提高并发会增加 NFS 与内存压力 |
 
 提交后，实际参数会冻结到该批次的 `config.json`。断点重试继续使用原参数，不会被以后修改的网页默认值覆盖。
 
@@ -191,19 +192,21 @@ FASTA 严格复核与批次快照
 下载原始结果并生成 HTML/CSV 报告
 ```
 
-当前 Slurm 脚本申请 `16 CPU / 64 GB RAM`。这是资源申请上限，不代表单个 Primer3/isPcr/BLAT 进程会自动使用 16 个线程。
+当前 Slurm 脚本申请 `16 CPU / 64 GB RAM`。isPCR 默认把候选 round-robin 分为 4 个 shard 并行执行，每个 shard 只加载一次基因组；网页可将并行数调为 4–8，实际并发不超过候选数。BLAT 仍在 isPCR 合并完成后单进程批量执行。
 
 ### 第五步：查看进度
 
 进度区会显示：
 
 - 批次状态；
-- 当前软件和 assembly；
-- Slurm 作业号和状态；
-- 已运行时间；
+- 正在校验数据库；
+- 正在运行 isPCR，以及已完成候选数、总候选数和活动并发数；
+- 正在 BLAT，以及需要复核的可疑候选数；
+- 正在整理服务器结果、下载结果、校验下载结果或生成报告；
+- Slurm 作业号、状态和已运行时间；
 - 每条序列的阶段或错误。
 
-网页在后台时会降低轮询频率，不影响服务器作业继续运行。
+网页每约 5 秒通过一次 SSH 同时读取 Slurm 和阶段进度；网页在后台时会降低本地状态轮询频率，不影响服务器作业继续运行。候选进度按完整 shard 跳动，例如 30 个候选、4 路并行时会按 `8/8/7/7` 完成，而不是每完成一对就变化。
 
 ## 8. 状态说明与断点重试
 
@@ -228,11 +231,12 @@ FASTA 严格复核与批次快照
 任务结束后可以：
 
 - 点击 **打开完整报告**：在新标签页打开 `report.html`；
-- 点击 **页面内预览**：按需在主页中加载报告；
+- 点击 **页面内预览**：按需打开全屏报告层，主页滚动会锁定；Esc 或“关闭”可退出；
 - 在完整报告中下载 `summary.csv`；
 - 使用 **复制全部**、**复制筛选结果** 或 **复制选中行**，将 TSV 直接粘贴到 Excel。
 
 完整报告支持按序列、assembly、验证结论和最大排名筛选；点击列标题可排序。
+报告表格是唯一的纵向滚动区，表格顶部和底部横向滚动条双向同步，因此无需先滚到表格底部才能查看右侧列。
 
 ### 9.1 主要结果列
 
@@ -252,9 +256,9 @@ FASTA 严格复核与批次快照
 | `product_length_design` | Primer3 在输入模板上的设计产物长度 |
 | `score` | Primer3 pair penalty；通常越低越优 |
 | `validation_classification` | 基因组 isPCR 验证结论 |
-| `validation_product_count` | 当前参数下找到的基因组产物数 |
-| `genomic_product_lengths_bp` | 每个基因组产物长度 |
-| `genomic_product_locations` | 基因组产物坐标 |
+| `validation_product_count` | 当前参数下找到的基因组产物总数 |
+| `genomic_product_lengths_bp` | 基因组产物长度；多位点时仅显示前 5 个 |
+| `genomic_product_locations` | 基因组产物坐标；多位点时仅显示前 5 个 |
 | `genomic_product_classes` | primary、alt/fix 或其他 contig 类型 |
 | `validation_products` | 坐标、长度和 contig 类型的组合说明 |
 | `warnings` | 模板坐标、工具或验证异常信息 |

@@ -17,6 +17,7 @@ import {
   validatePrimer3ServerConfig,
 } from './lib/primer3.mjs';
 import {
+  DEFAULT_ISPCR_WEB_PARAMETERS,
   executeSshIsPcr,
   normalizeIsPcrWebParameters,
   resultMatchesIsPcrParameters,
@@ -246,6 +247,7 @@ export function buildWebBatchConfiguration(
     ...(config.ucsc || {}),
     minProductSize: validation.minProductSize,
     maxProductSize: validation.maxProductSize,
+    parallelism: validation.parallelism,
   };
   return {
     config,
@@ -372,6 +374,7 @@ export async function batchValidateServer(options) {
     minPerfect: config.ucsc.minPerfect,
     minGood: config.ucsc.minGood,
     flipReverse: config.ucsc.flipReverse,
+    parallelism: config.ucsc.parallelism ?? DEFAULT_ISPCR_WEB_PARAMETERS.parallelism,
   };
   const assemblies = [...new Set(candidates.map((candidate) => candidate.assembly))];
   if (assemblies.some((assembly) => !ALLOWED_ASSEMBLIES.includes(assembly))) {
@@ -396,6 +399,46 @@ export async function batchValidateServer(options) {
       results[candidate.candidateId]?.[assembly], parameters,
     ));
     if (!subset.length) continue;
+    let lastProgressFingerprint = '';
+    let lastProgressWrite = 0;
+    const saveProgress = async (progress, { force = false } = {}) => {
+      const updatedAt = new Date().toISOString();
+      const nextRun = {
+        tool: 'isPCR/BLAT', assembly,
+        jobId: progress.jobId || batch.run?.jobId || null,
+        runId: progress.runId || batch.run?.runId || null,
+        state: progress.state || batch.run?.state || 'UNKNOWN',
+        phase: progress.phase || batch.run?.phase
+          || (serverConfig.progressProtocol === 'parallel_v1' ? 'database_check' : 'legacy_slurm'),
+        elapsedMs: Number.isFinite(progress.elapsedMs) ? progress.elapsedMs : batch.run?.elapsedMs,
+        candidateTotal: progress.candidateTotal ?? batch.run?.candidateTotal ?? subset.length,
+        candidateCompleted: progress.candidateCompleted ?? batch.run?.candidateCompleted ?? 0,
+        shardTotal: progress.shardTotal ?? batch.run?.shardTotal ?? null,
+        shardCompleted: progress.shardCompleted ?? batch.run?.shardCompleted ?? null,
+        activeWorkers: progress.activeWorkers ?? batch.run?.activeWorkers ?? null,
+        configuredParallelism: progress.configuredParallelism ?? parameters.parallelism,
+        actualParallelism: progress.actualParallelism ?? Math.min(parameters.parallelism, subset.length),
+        blatCandidateTotal: progress.blatCandidateTotal ?? batch.run?.blatCandidateTotal ?? 0,
+        downloadCompleted: progress.downloadCompleted ?? batch.run?.downloadCompleted ?? null,
+        downloadTotal: progress.downloadTotal ?? batch.run?.downloadTotal ?? null,
+        reattached: Boolean(progress.reattached || batch.run?.reattached),
+        updatedAt,
+      };
+      const fingerprint = JSON.stringify({ ...nextRun, elapsedMs: null, updatedAt: null });
+      const nowMs = Date.now();
+      if (!force && fingerprint === lastProgressFingerprint && nowMs - lastProgressWrite < 30_000) return;
+      batch.run = nextRun;
+      batch.updatedAt = updatedAt;
+      await writeJson(path.join(batchDir, 'batch.json'), batch);
+      lastProgressFingerprint = fingerprint;
+      lastProgressWrite = nowMs;
+    };
+    batch.run = null;
+    await saveProgress({
+      phase: 'database_check', state: 'PREPARING', candidateTotal: subset.length,
+      candidateCompleted: 0, configuredParallelism: parameters.parallelism,
+      actualParallelism: Math.min(parameters.parallelism, subset.length),
+    }, { force: true });
     const execution = await executeSshIsPcr({
       jobDir: batchDir,
       jobId: `${batch.batchId.slice(0, 100)}-${assembly}`,
@@ -403,11 +446,7 @@ export async function batchValidateServer(options) {
       assemblies: [assembly],
       parameters,
       serverConfig,
-      onProgress: async (progress) => {
-        batch.run = { tool: 'isPCR/BLAT', assembly, phase: 'slurm', ...progress, updatedAt: new Date().toISOString() };
-        batch.updatedAt = batch.run.updatedAt;
-        await writeJson(path.join(batchDir, 'batch.json'), batch);
-      },
+      onProgress: saveProgress,
     });
     await writeJson(path.join(execution.localRunDir, 'server-run-audit.json'), {
       schemaVersion: 1,
@@ -431,6 +470,7 @@ export async function batchValidateServer(options) {
       updatedAt: new Date().toISOString(),
       results,
     });
+    await saveProgress({ phase: 'reporting', state: 'COMPLETED' }, { force: true });
   }
   const updatedAt = new Date().toISOString();
   await writeJson(path.join(batchDir, 'ucsc-results.json'), { schemaVersion: 1, updatedAt, results });
@@ -449,22 +489,32 @@ export async function batchValidateServer(options) {
   await writeJson(path.join(batchDir, 'checkpoint.json'), next);
   await writeJson(path.join(batchDir, 'batch.json'), batch);
   await writeReports(batchDir, batch, candidates, results, config);
+  if (batch.run?.tool === 'isPCR/BLAT') {
+    batch.run = { ...batch.run, phase: 'complete', state: 'COMPLETED', updatedAt: new Date().toISOString() };
+    batch.updatedAt = batch.run.updatedAt;
+    await writeJson(path.join(batchDir, 'batch.json'), batch);
+  }
   console.log(`Server validation finished. Report: ${path.join(batchDir, 'report.html')}`);
   return results;
 }
 
 export async function batchRevalidate(options) {
   const batchDirectory = required(options, 'batch');
-  const validation = normalizeIsPcrWebParameters({ maxProductSize: Number(required(options, 'max-product-size')) });
+  const validation = normalizeIsPcrWebParameters({
+    maxProductSize: Number(required(options, 'max-product-size')),
+    parallelism: Number(options.parallelism ?? DEFAULT_ISPCR_WEB_PARAMETERS.parallelism),
+  });
   const { batchDir, batch, config } = await loadBundle(batchDirectory);
   const previous = {
     minProductSize: Object.hasOwn(config.ucsc || {}, 'minProductSize')
       ? config.ucsc.minProductSize : config.primer3?.parameters?.productSizeMin,
     maxProductSize: Object.hasOwn(config.ucsc || {}, 'maxProductSize')
       ? config.ucsc.maxProductSize : config.primer3?.parameters?.productSizeMax,
+    parallelism: config.ucsc?.parallelism ?? DEFAULT_ISPCR_WEB_PARAMETERS.parallelism,
   };
   if (previous.minProductSize !== validation.minProductSize
-    || previous.maxProductSize !== validation.maxProductSize) {
+    || previous.maxProductSize !== validation.maxProductSize
+    || previous.parallelism !== validation.parallelism) {
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
     const historyDir = path.join(batchDir, 'raw', 'validation-history', stamp);
     await mkdir(path.dirname(historyDir), { recursive: true });
@@ -484,6 +534,7 @@ export async function batchRevalidate(options) {
     ...(config.ucsc || {}),
     minProductSize: validation.minProductSize,
     maxProductSize: validation.maxProductSize,
+    parallelism: validation.parallelism,
   };
   batch.designSettings = {
     ...(batch.designSettings || {}),

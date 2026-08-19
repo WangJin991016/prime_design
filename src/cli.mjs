@@ -33,13 +33,13 @@ async function loadConfig(configPath = defaultConfigPath) {
 }
 
 function printHelp() {
-  console.log(`prime-design 0.4.0
+  console.log(`prime-design 0.5.0
 
 批量命令：
   batch-prepare --fasta <multi.fasta> --manifest <batch.tsv> [--name 名称] [--out A:\\...]
   batch-design-primer3 --batch <批次目录>
   batch-validate-server --batch <批次目录>
-  batch-revalidate --batch <批次目录> --max-product-size <1000-50000>
+  batch-revalidate --batch <批次目录> --max-product-size <1000-50000> [--parallelism <4-8>]
   batch-run --batch <批次目录>
   batch-report --batch <批次目录>
   provision-primer3-server [--config <配置文件>]

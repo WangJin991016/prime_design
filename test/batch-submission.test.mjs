@@ -97,17 +97,19 @@ test('web batch configuration freezes normalized parameters without mutating glo
     productSizeMax: 850,
     gcMinPercent: 42,
     gcMaxPercent: 58,
-  }, { maxProductSize: 12000 });
+  }, { maxProductSize: 12000, parallelism: 6 });
   assert.equal(source.primer3.parameters, undefined);
   assert.equal(config.primer3.server.hostAlias, 'Fdu_imi');
   assert.deepEqual([config.primer3.parameters.tmMinC, config.primer3.parameters.tmOptC, config.primer3.parameters.tmMaxC], [57, 61, 65]);
   assert.equal(config.ucsc.minProductSize, 0);
   assert.equal(config.ucsc.maxProductSize, 12000);
+  assert.equal(config.ucsc.parallelism, 6);
   assert.equal(designSettings.assembly, 'hg38');
   assert.equal(designSettings.primer3.numReturn, 20);
-  assert.deepEqual(designSettings.validation, { minProductSize: 0, maxProductSize: 12000 });
+  assert.deepEqual(designSettings.validation, { minProductSize: 0, maxProductSize: 12000, parallelism: 6 });
   assert.throws(() => buildWebBatchConfiguration(source, 'hg38', { numReturn: 21 }, { maxProductSize: 12000 }), /cannot exceed 20/);
   assert.throws(() => buildWebBatchConfiguration(source, 'hg38', {}, { maxProductSize: 999 }), /between 1000 and 50000/);
+  assert.throws(() => buildWebBatchConfiguration(source, 'hg38', {}, { maxProductSize: 12000, parallelism: 9 }), /parallelism/);
 });
 
 test('legacy batch snapshots keep their recorded count and native GC behavior', () => {

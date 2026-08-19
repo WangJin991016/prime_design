@@ -10,6 +10,7 @@ const scripts = [
   'provision-ucsc.slurm',
   'run-primer3.slurm',
   'run-ispcr.slurm',
+  'run-ispcr-parallel-v2.slurm',
 ];
 
 test('all Slurm jobs request 16 CPUs and 64 GB of memory', async () => {
@@ -29,10 +30,18 @@ test('Primer3 provisioning uses the allocated CPU count', async () => {
 });
 
 test('isPCR runs single-primer BLAT only for candidates needing review', async () => {
-  const source = await readFile(path.join(projectRoot, 'scripts', 'server', 'run-ispcr.slurm'), 'utf8');
+  const source = await readFile(path.join(projectRoot, 'scripts', 'server', 'run-ispcr-parallel-v2.slurm'), 'utf8');
   assert.match(source, /blat-review-ids\.txt/);
-  assert.match(source, /total\[id\] != 1 \|\| primary\[id\] != 1/);
+  assert.match(source, /total\[id\]!=1 \|\| primary\[id\]!=1/);
   assert.match(source, /skipped_all_unique_primary/);
   assert.match(source, /reviewed_suspicious_only/);
   assert.match(source, /blatReviewMode\\tsuspicious_only_v1/);
+  assert.match(source, /\(\(NR-1\)%total\)==shard/);
+  assert.match(source, /progress\.tsv/);
+  assert.match(source, /--status/);
+  assert.match(source, /failed-\$shard/);
+  assert.match(source, /exited without a completion marker/);
+  assert.match(source, /terminate_shards/);
+  assert.match(source, /shardManifestSha256/);
+  assert.doesNotMatch(source, /wait -n/);
 });

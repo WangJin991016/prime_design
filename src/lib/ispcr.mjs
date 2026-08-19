@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { assertADrive } from './job.mjs';
@@ -12,11 +12,13 @@ const MAX_CAPTURE_BYTES = 4 * 1024 * 1024;
 
 export const DEFAULT_ISPCR_WEB_PARAMETERS = Object.freeze({
   maxProductSize: 10000,
+  parallelism: 4,
 });
 
 export const ISPCR_WEB_CONSTRAINTS = Object.freeze({
   minProductSize: 0,
   maxProductSize: Object.freeze({ min: 1000, max: 50000, integer: true }),
+  parallelism: Object.freeze({ min: 4, max: 8, integer: true }),
 });
 
 export function normalizeIsPcrWebParameters(value = {}) {
@@ -33,9 +35,16 @@ export function normalizeIsPcrWebParameters(value = {}) {
     || parameters.maxProductSize > ISPCR_WEB_CONSTRAINTS.maxProductSize.max) {
     throw new Error(`maxProductSize must be an integer between ${ISPCR_WEB_CONSTRAINTS.maxProductSize.min} and ${ISPCR_WEB_CONSTRAINTS.maxProductSize.max}.`);
   }
+  if (typeof parameters.parallelism !== 'number'
+    || !Number.isInteger(parameters.parallelism)
+    || parameters.parallelism < ISPCR_WEB_CONSTRAINTS.parallelism.min
+    || parameters.parallelism > ISPCR_WEB_CONSTRAINTS.parallelism.max) {
+    throw new Error(`parallelism must be an integer between ${ISPCR_WEB_CONSTRAINTS.parallelism.min} and ${ISPCR_WEB_CONSTRAINTS.parallelism.max}.`);
+  }
   return Object.freeze({
     minProductSize: ISPCR_WEB_CONSTRAINTS.minProductSize,
     maxProductSize: parameters.maxProductSize,
+    parallelism: parameters.parallelism,
   });
 }
 
@@ -47,6 +56,31 @@ export function resultMatchesIsPcrParameters(result, parameters) {
     && String(recorded.minPerfect) === String(parameters.minPerfect)
     && String(recorded.minGood) === String(parameters.minGood)
     && String(recorded.flipReverse) === String(parameters.flipReverse ? 1 : 0);
+}
+
+export function buildRoundRobinShardPlan(candidateIds, configuredParallelism = 4) {
+  if (!Array.isArray(candidateIds) || candidateIds.length === 0) throw new Error('候选 ID 列表不能为空。');
+  if (!Number.isInteger(configuredParallelism)
+    || configuredParallelism < ISPCR_WEB_CONSTRAINTS.parallelism.min
+    || configuredParallelism > ISPCR_WEB_CONSTRAINTS.parallelism.max) {
+    throw new Error('parallelism 必须是 4–8 的整数。');
+  }
+  const seen = new Set();
+  const ids = candidateIds.map((value) => {
+    const id = assertSafeId(value, '候选 ID');
+    if (seen.has(id)) throw new Error(`候选 ID 重复: ${id}`);
+    seen.add(id);
+    return id;
+  });
+  const actualParallelism = Math.min(configuredParallelism, ids.length);
+  const shards = Array.from({ length: actualParallelism }, () => []);
+  ids.forEach((id, index) => shards[index % actualParallelism].push(id));
+  return Object.freeze({
+    configuredParallelism,
+    actualParallelism,
+    strategy: 'round_robin_v1',
+    shards: Object.freeze(shards.map((shard) => Object.freeze(shard))),
+  });
 }
 
 function optionalSha256(value, label) {
@@ -325,8 +359,13 @@ export function validateIsPcrServerConfig(value) {
   const expectedDatabaseSha256 = Object.fromEntries(Object.entries(config.expectedDatabaseSha256 || {}).map(([assembly, hash]) => [
     assertSafeId(assembly, '数据库 assembly'), optionalSha256(hash, `${assembly} database hash`),
   ]));
+  const progressProtocol = config.progressProtocol || null;
+  if (progressProtocol !== null && progressProtocol !== 'parallel_v1') {
+    throw new Error('isPcrServer.progressProtocol 无效。');
+  }
   return {
     hostAlias, remoteRoot, slurmScript, sshConfigPath, timeoutMs, supportedAssemblies,
+    progressProtocol,
     expectedIsPcrSha256: optionalSha256(config.expectedIsPcrSha256, 'isPcr hash'),
     expectedBlatSha256: optionalSha256(config.expectedBlatSha256, 'BLAT hash'),
     expectedProvisionManifestSha256: optionalSha256(config.expectedProvisionManifestSha256, 'provision manifest hash'),
@@ -370,6 +409,10 @@ export function buildSbatchRemoteArgs({ server, runId, assemblies, parameters, w
   if (maxSize < minSize) throw new Error('maxSize 不能小于 minSize。');
   const minPerfect = assertInteger(parameters.minPerfect, 'minPerfect', 1);
   const minGood = assertInteger(parameters.minGood, 'minGood', 1);
+  const parallelism = assertInteger(parameters.parallelism ?? DEFAULT_ISPCR_WEB_PARAMETERS.parallelism, 'parallelism', 1);
+  if (parallelism < ISPCR_WEB_CONSTRAINTS.parallelism.min || parallelism > ISPCR_WEB_CONSTRAINTS.parallelism.max) {
+    throw new Error('parallelism 必须是 4–8 的整数。');
+  }
   const flipReverse = parameters.flipReverse ? 1 : 0;
   return [
     ...connectionArgs(server),
@@ -377,7 +420,7 @@ export function buildSbatchRemoteArgs({ server, runId, assemblies, parameters, w
     'sbatch',
     ...(wait ? ['--wait'] : []),
     '--parsable',
-    `--export=ALL,PRIME_RUN_ID=${assertSafeId(runId, '远程运行 ID')},PRIME_ASSEMBLIES=${requestedAssemblies.join(',')},PRIME_MIN_SIZE=${minSize},PRIME_MAX_SIZE=${maxSize},PRIME_MIN_PERFECT=${minPerfect},PRIME_MIN_GOOD=${minGood},PRIME_FLIP_REVERSE=${flipReverse}`,
+    `--export=ALL,PRIME_RUN_ID=${assertSafeId(runId, '远程运行 ID')},PRIME_ASSEMBLIES=${requestedAssemblies.join(',')},PRIME_MIN_SIZE=${minSize},PRIME_MAX_SIZE=${maxSize},PRIME_MIN_PERFECT=${minPerfect},PRIME_MIN_GOOD=${minGood},PRIME_PARALLELISM=${parallelism},PRIME_FLIP_REVERSE=${flipReverse}`,
     server.slurmScript,
   ];
 }
@@ -385,6 +428,80 @@ export function buildSbatchRemoteArgs({ server, runId, assemblies, parameters, w
 const SLURM_FAILURE_STATES = new Set([
   'FAILED', 'CANCELLED', 'TIMEOUT', 'OUT_OF_MEMORY', 'NODE_FAIL', 'PREEMPTED', 'BOOT_FAIL', 'DEADLINE',
 ]);
+
+const REMOTE_PROGRESS_PHASES = new Set([
+  'database_check', 'ispcr', 'blat', 'packaging', 'complete', 'failed',
+]);
+
+export function parseRemoteProgressStatus(text, expectedRunId) {
+  const lines = String(text).split(/\r?\n/);
+  const stateLine = lines.find((line) => line.startsWith('slurmState\t'));
+  const slurmState = String(stateLine?.split('\t')[1] || 'UNKNOWN').split(/[+\s]/)[0].toUpperCase();
+  const begin = lines.indexOf('progressBegin');
+  const end = lines.indexOf('progressEnd');
+  if (begin < 0 || end <= begin + 1) return { slurmState, progress: null };
+  const progress = parseKeyValueTsv(lines.slice(begin + 1, end).join('\n'));
+  if (progress.schemaVersion !== '1' || progress.runId !== expectedRunId
+    || !REMOTE_PROGRESS_PHASES.has(progress.phase)) {
+    throw new Error('远程 progress.tsv 与本次运行不一致。');
+  }
+  const numericKeys = [
+    'candidateTotal', 'candidateCompleted', 'shardTotal', 'shardCompleted', 'activeWorkers',
+    'configuredParallelism', 'actualParallelism', 'blatCandidateTotal',
+  ];
+  const numeric = Object.fromEntries(numericKeys.map((key) => [key, assertInteger(progress[key], key)]));
+  if (numeric.candidateCompleted > numeric.candidateTotal
+    || numeric.shardCompleted > numeric.shardTotal
+    || numeric.actualParallelism > numeric.configuredParallelism) {
+    throw new Error('远程 progress.tsv 计数范围无效。');
+  }
+  return {
+    slurmState,
+    progress: {
+      schemaVersion: 1,
+      runId: progress.runId,
+      phase: progress.phase,
+      assembly: assertSafeId(progress.assembly, '进度 assembly'),
+      ...numeric,
+      updatedAtUtc: progress.updatedAtUtc || null,
+    },
+  };
+}
+
+async function readRemoteProgressStatus({ runner, server, jobId, runId }) {
+  const response = await runner('ssh', [
+    ...connectionArgs(server), server.hostAlias, 'bash', server.slurmScript,
+    '--status', String(jobId), assertSafeId(runId, '远程运行 ID'),
+  ], { timeoutMs: 30_000 });
+  return parseRemoteProgressStatus(response.stdout, runId);
+}
+
+export async function waitForIsPcrSlurmCompletion({
+  runner = runProcess, server, jobId, runId, timeoutMs, onProgress = async () => {}, pollMs = 5_000,
+}) {
+  const started = Date.now();
+  let consecutiveErrors = 0;
+  while (Date.now() - started < timeoutMs) {
+    try {
+      const status = await readRemoteProgressStatus({ runner, server, jobId, runId });
+      consecutiveErrors = 0;
+      await onProgress({
+        jobId: String(jobId), state: status.slurmState || 'UNKNOWN', elapsedMs: Date.now() - started,
+        runId, ...(status.progress || {}),
+      });
+      if (status.slurmState === 'COMPLETED') return { state: 'COMPLETED', elapsedMs: Date.now() - started };
+      if (SLURM_FAILURE_STATES.has(status.slurmState)) {
+        throw new Error(`Slurm 作业 ${jobId} 结束于 ${status.slurmState}。`);
+      }
+    } catch (error) {
+      if (/结束于/.test(error.message)) throw error;
+      consecutiveErrors += 1;
+      if (consecutiveErrors >= 5) throw new Error(`无法查询 Slurm 作业 ${jobId}：${error.message}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+  throw new Error(`等待 Slurm 作业 ${jobId} 超时；作业可能仍在服务器运行。`);
+}
 
 export async function waitForSlurmCompletion({
   runner = runProcess, connection = [], hostAlias, jobId, timeoutMs, onProgress = async () => {}, pollMs = 2_000,
@@ -503,38 +620,94 @@ export async function executeSshIsPcr({
 }) {
   const server = validateIsPcrServerConfig(serverConfig);
   const requestedAssemblies = requestedAssemblyList(assemblies, server);
+  if (requestedAssemblies.length !== 1) throw new Error('并行 isPCR 每个 Slurm 作业只允许一个 assembly。');
   if (server.sshConfigPath) await access(server.sshConfigPath);
 
-  const runId = makeRemoteRunId(jobId, now);
-  const localRunDir = assertADrive(path.join(jobDir, 'raw', 'server-ispcr', runId), '服务器原始结果目录');
-  await mkdir(path.dirname(localRunDir), { recursive: true });
-  await mkdir(localRunDir, { recursive: false });
   const queryText = buildIsPcrQuery(candidates);
+  const querySha256 = createHash('sha256').update(queryText, 'utf8').digest('hex');
   const expectedPrimerFastaSha256 = createHash('sha256')
     .update(buildBlatPrimerFasta(candidates), 'utf8')
     .digest('hex');
-  const queryPath = path.join(localRunDir, 'queries.tsv');
-  await writeFile(queryPath, queryText, 'utf8');
-  const querySha256 = await sha256File(queryPath);
-  const remoteRunDir = `${server.remoteRoot}/runs/${runId}`;
-
   const sshArgs = connectionArgs(server);
   const scpArgs = connectionArgs(server);
-  await runner('ssh', [...sshArgs, server.hostAlias, 'mkdir', remoteRunDir], { timeoutMs: 60_000 });
-  await runner('scp', [...scpArgs, queryPath, `${server.hostAlias}:${remoteRunDir}/queries.tsv`], { timeoutMs: 120_000 });
-  const submission = await runner('ssh', buildSbatchRemoteArgs({
-    server, runId, assemblies: requestedAssemblies, parameters, wait: false,
-  }), {
-    timeoutMs: 120_000,
+  const runRoot = assertADrive(path.join(jobDir, 'raw', 'server-ispcr'), '服务器原始结果目录');
+  await mkdir(runRoot, { recursive: true });
+  const resumePath = path.join(runRoot, `resume-${assertSafeId(jobId, '任务 ID')}.json`);
+  const resumeSignature = JSON.stringify({
+    querySha256, assemblies: requestedAssemblies, parameters: {
+      minSize: parameters.minSize, maxSize: parameters.maxSize,
+      minPerfect: parameters.minPerfect, minGood: parameters.minGood,
+      flipReverse: Boolean(parameters.flipReverse),
+      parallelism: parameters.parallelism ?? DEFAULT_ISPCR_WEB_PARAMETERS.parallelism,
+    },
+    runScriptSha256: server.expectedRunScriptSha256,
   });
-  const jobMatch = submission.stdout.match(/(?:^|\r?\n)(\d+)(?:;[^\r\n]+)?(?:\r?\n|$)/);
-  const slurmJobId = jobMatch?.[1] || null;
-  if (!slurmJobId) throw new Error('Slurm 提交成功，但未能从输出中确认作业 ID。');
-  await onProgress({ jobId: slurmJobId, state: 'SUBMITTED', elapsedMs: 0, runId, remoteRunDir });
-  await waitForSlurmCompletion({
-    runner, connection: sshArgs, hostAlias: server.hostAlias, jobId: slurmJobId,
-    timeoutMs: server.timeoutMs, onProgress,
-  });
+  let resume = null;
+  if (server.progressProtocol === 'parallel_v1') {
+    try {
+      const parsed = JSON.parse(await readFile(resumePath, 'utf8'));
+      if (parsed.signature === resumeSignature && SAFE_ID.test(parsed.runId)
+        && /^\d+$/.test(String(parsed.slurmJobId || ''))) resume = parsed;
+    } catch (error) {
+      if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+    }
+  }
+
+  let runId;
+  let localRunDir;
+  let remoteRunDir;
+  let slurmJobId;
+  let knownState = '';
+  if (resume) {
+    const remote = await readRemoteProgressStatus({
+      runner, server, jobId: resume.slurmJobId, runId: resume.runId,
+    });
+    if (['PENDING', 'RUNNING', 'CONFIGURING', 'COMPLETING', 'COMPLETED'].includes(remote.slurmState)) {
+      ({ runId, localRunDir, remoteRunDir, slurmJobId } = resume);
+      knownState = remote.slurmState;
+      await onProgress({
+        jobId: slurmJobId, state: knownState, elapsedMs: 0, runId,
+        reattached: true, ...(remote.progress || {}),
+      });
+    }
+  }
+
+  if (!slurmJobId) {
+    runId = makeRemoteRunId(jobId, now);
+    localRunDir = assertADrive(path.join(runRoot, runId), '服务器原始结果目录');
+    await mkdir(localRunDir, { recursive: false });
+    remoteRunDir = `${server.remoteRoot}/runs/${runId}`;
+    const queryPath = path.join(localRunDir, 'queries.tsv');
+    await writeFile(queryPath, queryText, 'utf8');
+    await runner('ssh', [...sshArgs, server.hostAlias, 'mkdir', remoteRunDir], { timeoutMs: 60_000 });
+    await runner('scp', [...scpArgs, queryPath, `${server.hostAlias}:${remoteRunDir}/queries.tsv`], { timeoutMs: 120_000 });
+    const submission = await runner('ssh', buildSbatchRemoteArgs({
+      server, runId, assemblies: requestedAssemblies, parameters, wait: false,
+    }), { timeoutMs: 120_000 });
+    const jobMatch = submission.stdout.match(/(?:^|\r?\n)(\d+)(?:;[^\r\n]+)?(?:\r?\n|$)/);
+    slurmJobId = jobMatch?.[1] || null;
+    if (!slurmJobId) throw new Error('Slurm 提交成功，但未能从输出中确认作业 ID。');
+    if (server.progressProtocol === 'parallel_v1') {
+      const state = { signature: resumeSignature, runId, localRunDir, remoteRunDir, slurmJobId };
+      const resumeTmp = `${resumePath}.tmp`;
+      await writeFile(resumeTmp, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+      await rename(resumeTmp, resumePath);
+    }
+    await onProgress({ jobId: slurmJobId, state: 'SUBMITTED', elapsedMs: 0, runId });
+  }
+  if (knownState !== 'COMPLETED') {
+    if (server.progressProtocol === 'parallel_v1') {
+      await waitForIsPcrSlurmCompletion({
+        runner, server, jobId: slurmJobId, runId,
+        timeoutMs: server.timeoutMs, onProgress,
+      });
+    } else {
+      await waitForSlurmCompletion({
+        runner, connection: sshArgs, hostAlias: server.hostAlias, jobId: slurmJobId,
+        timeoutMs: server.timeoutMs, onProgress,
+      });
+    }
+  }
 
   const downloads = [
     ['completed.tsv', `${remoteRunDir}/completed.tsv`],
@@ -550,18 +723,37 @@ export async function executeSshIsPcr({
     [`slurm-${slurmJobId}.out`, `${server.remoteRoot}/logs/prime_ispcr_${slurmJobId}.out`],
     [`slurm-${slurmJobId}.err`, `${server.remoteRoot}/logs/prime_ispcr_${slurmJobId}.err`],
   );
-  for (const [localName, remotePath] of downloads) {
+  for (const [index, [localName, remotePath]] of downloads.entries()) {
+    await onProgress({
+      jobId: slurmJobId, state: 'COMPLETED', phase: 'download', runId,
+      downloadCompleted: index, downloadTotal: downloads.length,
+    });
     await runner('scp', [...scpArgs, `${server.hostAlias}:${remotePath}`, path.join(localRunDir, localName)], {
       timeoutMs: 120_000,
     });
   }
+  await onProgress({
+    jobId: slurmJobId, state: 'COMPLETED', phase: 'download', runId,
+    downloadCompleted: downloads.length, downloadTotal: downloads.length,
+  });
 
   const completed = parseKeyValueTsv(await readFile(path.join(localRunDir, 'completed.tsv'), 'utf8'));
-  if (completed.schemaVersion !== '1' || completed.runId !== runId) throw new Error('远程完成标记与请求不一致。');
+  await onProgress({ jobId: slurmJobId, state: 'COMPLETED', phase: 'verify', runId });
+  if (!['1', '2'].includes(completed.schemaVersion) || completed.runId !== runId) throw new Error('远程完成标记与请求不一致。');
   if (completed.assemblies !== requestedAssemblies.join(',')) throw new Error('远程组装集合与请求不一致。');
   if (completed.querySha256 !== querySha256) throw new Error('远程 query SHA-256 与本地上传文件不一致。');
   if (assertInteger(completed.candidateCount, 'candidateCount') !== candidates.length) {
     throw new Error('远程候选数量与本地不一致。');
+  }
+  if (completed.schemaVersion === '2') {
+    const configured = assertInteger(completed.configuredParallelism, 'configuredParallelism');
+    const actual = assertInteger(completed.actualParallelism, 'actualParallelism');
+    const requested = assertInteger(parameters.parallelism ?? DEFAULT_ISPCR_WEB_PARAMETERS.parallelism, 'parallelism');
+    if (configured !== requested || actual !== Math.min(requested, candidates.length)
+      || completed.shardStrategy !== 'round_robin_v1'
+      || !/^[a-f0-9]{64}$/i.test(completed.shardManifestSha256 || '')) {
+      throw new Error('远程并行分片完成标记与请求不一致。');
+    }
   }
   for (const key of ['toolSha256', 'blatSha256', 'provisionManifestSha256', 'primersSha256']) {
     if (!/^[a-f0-9]{64}$/i.test(completed[key] || '')) {

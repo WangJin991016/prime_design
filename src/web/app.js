@@ -21,7 +21,7 @@ const PARAMETER_IDS = [
 ];
 const INTEGER_PARAMETER_IDS = new Set([
   'numReturn', 'primerLengthMin', 'primerLengthOpt', 'primerLengthMax',
-  'productSizeMin', 'productSizeMax', 'validationMaxProductSize',
+  'productSizeMin', 'productSizeMax', 'validationMaxProductSize', 'validationParallelism',
 ]);
 
 async function api(url, options = {}) {
@@ -61,19 +61,29 @@ function readPrimer3Parameters() {
 }
 
 function readValidationParameters() {
-  return { maxProductSize: numericValue('validationMaxProductSize') };
+  return {
+    maxProductSize: numericValue('validationMaxProductSize'),
+    parallelism: numericValue('validationParallelism'),
+  };
 }
 
 function validationParameterValidation(parameters) {
+  const errors = [];
   const invalidIds = new Set();
   const value = parameters.maxProductSize;
   const limits = state.validationConstraints?.maxProductSize || { min: 1000, max: 50000 };
   if (typeof value !== 'number' || !Number.isSafeInteger(value)
     || value < limits.min || value > limits.max) {
     invalidIds.add('validationMaxProductSize');
-    return { errors: [`基因组 isPCR 最大产物长度必须是 ${limits.min}–${limits.max} 的整数。`], invalidIds };
+    errors.push(`基因组 isPCR 最大产物长度必须是 ${limits.min}–${limits.max} 的整数。`);
   }
-  return { errors: [], invalidIds };
+  const parallelLimits = state.validationConstraints?.parallelism || { min: 4, max: 8 };
+  if (typeof parameters.parallelism !== 'number' || !Number.isSafeInteger(parameters.parallelism)
+    || parameters.parallelism < parallelLimits.min || parameters.parallelism > parallelLimits.max) {
+    invalidIds.add('validationParallelism');
+    errors.push(`isPCR 并行任务数必须是 ${parallelLimits.min}–${parallelLimits.max} 的整数。`);
+  }
+  return { errors, invalidIds };
 }
 
 function validateValidationParameters(parameters) {
@@ -148,7 +158,7 @@ function updateParameterValidity(primer3Parameters, validationParameters) {
     ...primer3ParameterValidation(primer3Parameters).invalidIds,
     ...validationParameterValidation(validationParameters).invalidIds,
   ]);
-  for (const id of [...PARAMETER_IDS, 'validationMaxProductSize']) {
+  for (const id of [...PARAMETER_IDS, 'validationMaxProductSize', 'validationParallelism']) {
     const input = $(`#${id}`);
     if (invalidIds.has(id)) input.setAttribute('aria-invalid', 'true');
     else input.removeAttribute('aria-invalid');
@@ -173,6 +183,7 @@ function applyPrimer3Defaults() {
   for (const id of PARAMETER_IDS) $(`#${id}`).value = state.primer3Defaults[id];
   if (state.validationDefaults) {
     $('#validationMaxProductSize').value = state.validationDefaults.maxProductSize;
+    $('#validationParallelism').value = state.validationDefaults.parallelism;
   }
   updateParameterSummary();
   updateRunButton();
@@ -306,6 +317,7 @@ $('#fastaText').addEventListener('input', invalidatePreview);
 $('#batchAssembly').addEventListener('change', updateRunButton);
 for (const id of PARAMETER_IDS) $(`#${id}`).addEventListener('input', updateRunButton);
 $('#validationMaxProductSize').addEventListener('input', updateRunButton);
+$('#validationParallelism').addEventListener('input', updateRunButton);
 $('#resetPrimer3Parameters').addEventListener('click', () => { clearErrors(); applyPrimer3Defaults(); });
 $('#previewButton').addEventListener('click', preview);
 $('#refreshLocalCheck').addEventListener('click', loadLocalSystemCheck);
@@ -476,12 +488,40 @@ async function pollStatus(generation = state.pollGeneration) {
 function renderStatus(status) {
   const completed = status.records.filter((record) => record.stage === 'complete').length;
   const failed = status.records.filter((record) => record.stage === 'failed').length;
-  const percent = status.records.length ? Math.round((completed + failed) / status.records.length * 100) : 0;
+  const run = status.run;
+  let percent = status.records.length ? Math.round((completed + failed) / status.records.length * 100) : 0;
+  if (run?.tool === 'isPCR/BLAT') {
+    const fraction = run.candidateTotal > 0 ? Math.min(1, (run.candidateCompleted || 0) / run.candidateTotal) : 0;
+    const downloadFraction = run.downloadTotal > 0 ? Math.min(1, (run.downloadCompleted || 0) / run.downloadTotal) : 0;
+    const phasePercent = {
+      database_check: 5,
+      ispcr: 10 + 70 * fraction,
+      blat: 85,
+      packaging: 92,
+      download: 94 + 4 * downloadFraction,
+      verify: 99,
+      reporting: 99,
+      complete: 100,
+    };
+    if (Number.isFinite(phasePercent[run.phase])) percent = Math.round(phasePercent[run.phase]);
+  }
   $('#progressBar').style.width = `${percent}%`;
   $('.progress').setAttribute('aria-valuenow', String(percent));
-  const run = status.run;
+  const phaseText = (() => {
+    if (!run) return '';
+    if (run.phase === 'database_check') return '正在校验数据库';
+    if (run.phase === 'ispcr') return `正在运行 isPCR，已完成 ${run.candidateCompleted || 0}/${run.candidateTotal || 0} 个候选，${run.activeWorkers ?? run.actualParallelism ?? '?'} 路运行中`;
+    if (run.phase === 'blat') return `正在 BLAT，复核 ${run.blatCandidateTotal || 0} 个可疑候选`;
+    if (run.phase === 'packaging') return '正在整理服务器结果';
+    if (run.phase === 'download') return `正在下载结果 ${run.downloadCompleted || 0}/${run.downloadTotal || 0}`;
+    if (run.phase === 'verify') return '正在校验下载结果';
+    if (run.phase === 'reporting') return '正在生成报告';
+    if (run.phase === 'complete') return '验证完成';
+    if (run.phase === 'failed') return '服务器验证失败';
+    return run.state || run.phase;
+  })();
   const runDetail = run
-    ? ` · ${run.tool}${run.assembly ? `/${run.assembly}` : ''} · Slurm ${run.jobId || '等待作业号'} · ${run.state || run.phase}${Number.isFinite(run.elapsedMs) ? ` · ${Math.round(run.elapsedMs / 1000)} 秒` : ''}`
+    ? ` · ${phaseText}${run.jobId ? ` · Slurm ${run.jobId}` : ''}${run.reattached ? ' · 已重新挂接' : ''}${Number.isFinite(run.elapsedMs) ? ` · ${Math.round(run.elapsedMs / 1000)} 秒` : ''}`
     : '';
   text($('#progressText'), `批次 ${status.name}：${status.status}${runDetail}${status.error ? ` — ${status.error}` : ''}`);
   const container = $('#recordProgress');
@@ -509,27 +549,37 @@ $('#retryButton').addEventListener('click', startRun);
 function clearReportPreview() {
   show($('#reportLink'), false);
   const preview = $('#previewReportButton');
-  preview.textContent = '页面内预览';
   show(preview, false);
+  const dialog = $('#reportDialog');
+  if (dialog.open) dialog.close();
   const frame = $('#reportFrame');
   frame.src = 'about:blank';
   delete frame.dataset.batchId;
-  show(frame, false);
+  document.body.classList.remove('report-open');
 }
 
 $('#previewReportButton').addEventListener('click', () => {
+  const dialog = $('#reportDialog');
   const frame = $('#reportFrame');
-  if (!frame.classList.contains('hidden')) {
-    frame.src = 'about:blank';
-    delete frame.dataset.batchId;
-    show(frame, false);
-    $('#previewReportButton').textContent = '页面内预览';
-    return;
-  }
-  frame.src = `/batches/${encodeURIComponent(state.batchId)}/report.html`;
+  const url = `/batches/${encodeURIComponent(state.batchId)}/report.html`;
+  frame.src = url;
   frame.dataset.batchId = state.batchId;
-  show(frame);
-  $('#previewReportButton').textContent = '关闭页面内预览';
+  $('#reportDialogOpen').href = url;
+  document.body.classList.add('report-open');
+  dialog.showModal();
+});
+
+function closeReportDialog() {
+  const dialog = $('#reportDialog');
+  if (dialog.open) dialog.close();
+}
+
+$('#reportDialogClose').addEventListener('click', closeReportDialog);
+$('#reportDialog').addEventListener('close', () => {
+  $('#reportFrame').src = 'about:blank';
+  delete $('#reportFrame').dataset.batchId;
+  document.body.classList.remove('report-open');
+  $('#previewReportButton').focus();
 });
 
 document.addEventListener('visibilitychange', () => {

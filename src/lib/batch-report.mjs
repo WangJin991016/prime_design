@@ -19,6 +19,16 @@ function resultFor(results, candidate) {
   return stored?.[candidate.assembly] || (stored?.assembly === candidate.assembly ? stored : null);
 }
 
+export const MAX_DISPLAYED_GENOMIC_PRODUCTS = 5;
+
+function displayedProductText(products, formatter) {
+  const values = products.slice(0, MAX_DISPLAYED_GENOMIC_PRODUCTS).map(formatter);
+  if (products.length > MAX_DISPLAYED_GENOMIC_PRODUCTS) {
+    values.push(`…（仅显示前 ${MAX_DISPLAYED_GENOMIC_PRODUCTS} 个，共 ${products.length} 个）`);
+  }
+  return values.join('; ');
+}
+
 export const CLASSIFICATION_LABELS = Object.freeze({
   pass_single_product: '唯一产物',
   fail_multiple_loci: '多位点',
@@ -125,11 +135,15 @@ export function buildBatchRows({ batch, candidates, results = {} }) {
       classification,
       classificationLabel: classificationLabel(classification),
       validationProductCount: result ? products.length : '',
-      genomicProductLengths: products.map((product) => product.productSize).join('; '),
-      genomicProductLengthsBp: products.map((product) => product.productSize),
-      genomicProductLocations: products.map((product) => product.location).join('; '),
-      genomicProductClasses: products.map((product) => product.contigClass).join('; '),
-      validationProducts: products.map((product) => `${product.location} (${product.productSize} bp${product.contigClass ? `, ${product.contigClass}` : ''})`).join('; '),
+      genomicProductLengths: displayedProductText(products, (product) => product.productSize),
+      genomicProductLengthsBp: products.slice(0, MAX_DISPLAYED_GENOMIC_PRODUCTS)
+        .map((product) => product.productSize),
+      genomicProductLocations: displayedProductText(products, (product) => product.location),
+      genomicProductClasses: displayedProductText(products, (product) => product.contigClass),
+      validationProducts: displayedProductText(
+        products,
+        (product) => `${product.location} (${product.productSize} bp${product.contigClass ? `, ${product.contigClass}` : ''})`,
+      ),
       warnings: warningText(candidate, result, templatePositions.warning ? [templatePositions.warning] : []),
     };
   });
@@ -227,6 +241,7 @@ function designSettings(batch, config) {
       : (config?.ucsc && Object.hasOwn(config.ucsc, 'maxProductSize')
         ? `${recorded(config.ucsc.minProductSize ?? internal?.productSizeMin)}–${recorded(config.ucsc.maxProductSize)} bp`
         : '未记录'),
+    validationParallelism: recorded(validation?.parallelism ?? config?.ucsc?.parallelism),
     gc: web
       ? `${web.gcMinPercent}–${web.gcMaxPercent}%`
       : (internal ? recordedRange(internal.gcMinPercent, internal.gcMaxPercent, '%') : '未记录'),
@@ -237,7 +252,7 @@ export function renderBatchReport({ batch, candidates, results = {}, config = nu
   const summary = summarizeBatch({ batch, candidates, results });
   const dataRows = buildBatchRows({ batch, candidates, results });
   const settings = designSettings(batch, config);
-  const settingsCard = `<section class="card settings-card"><h2>本批设计设置</h2><div><strong>基因组</strong> ${escapeHtml(settings.assembly)}</div><div><strong>候选引物对</strong> ${escapeHtml(settings.numReturn)}</div><div><strong>Tm</strong> ${escapeHtml(settings.tm)}</div><div><strong>引物长度</strong> ${escapeHtml(settings.primerLength)}</div><div><strong>模板产物范围</strong> ${escapeHtml(settings.productSize)}</div><div><strong>基因组验证范围</strong> ${escapeHtml(settings.validationSize)}</div><div><strong>GC</strong> ${escapeHtml(settings.gc)}</div></section>`;
+  const settingsCard = `<section class="card settings-card"><h2>本批设计设置</h2><div><strong>基因组</strong> ${escapeHtml(settings.assembly)}</div><div><strong>候选引物对</strong> ${escapeHtml(settings.numReturn)}</div><div><strong>Tm</strong> ${escapeHtml(settings.tm)}</div><div><strong>引物长度</strong> ${escapeHtml(settings.primerLength)}</div><div><strong>模板产物范围</strong> ${escapeHtml(settings.productSize)}</div><div><strong>基因组验证范围</strong> ${escapeHtml(settings.validationSize)}</div><div><strong>isPCR 并发</strong> ${escapeHtml(settings.validationParallelism)}</div><div><strong>GC</strong> ${escapeHtml(settings.gc)}</div></section>`;
   const value = summary.engines.primer3;
   const cards = `<section class="card"><h2>Primer3</h2><div>候选 ${value.candidateCount}</div><div>唯一产物 ${value.passSingleProduct}</div><div>多位点 ${value.multipleLoci}</div><div>无产物 ${value.noProduct}</div><div>需复核 ${value.review}</div><div>验证失败 ${value.failed}</div><div>待验证 ${value.pending}</div></section>`;
   const rows = dataRows.map((row) => {
@@ -258,10 +273,10 @@ export function renderBatchReport({ batch, candidates, results = {}, config = nu
 <title>批量引物设计与特异性验证 - ${escapeHtml(batch.name)}</title>
 <style>
 ${renderGlassThemeCss()}
-*{box-sizing:border-box}html{min-height:100%;background:#eef4fb}body{min-height:100vh;margin:0;padding:22px;font-family:var(--font-body);color:var(--text);background:var(--page-bg)}h1,h2{font-family:var(--font-heading)}.report-head h1{margin:0 0 6px}.muted{color:var(--muted)}button,a,select,input{font:inherit;border:1px solid var(--border);border-radius:calc(var(--radius) * .6);padding:7px 9px;background:var(--input-bg);color:var(--text)}button,a{cursor:pointer}button:hover,a:hover{border-color:var(--primary)}button:focus-visible,a:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid color-mix(in srgb,var(--primary) 38%,transparent);outline-offset:2px}.primary{background:var(--primary)!important;color:var(--primary-contrast)!important;border-color:var(--primary)!important}.cards{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0}.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;min-width:180px;box-shadow:var(--shadow)}.card h2{font-size:16px;margin:0 0 8px}.settings-card{min-width:min(100%,360px);line-height:1.65}.settings-card strong{display:inline-block;min-width:88px;color:var(--primary)}.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:end;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:10px;box-shadow:var(--shadow)}.toolbar label{display:grid;gap:4px;font-size:12px}.toolbar a{text-decoration:none}.table-wrap{overflow:auto;max-height:70vh;border:1px solid var(--border);border-radius:calc(var(--radius) * .7);background:var(--surface)}table{border-collapse:collapse;width:max-content;min-width:100%;background:var(--surface);font-size:12px}th,td{border-bottom:1px solid color-mix(in srgb,var(--text) 12%,transparent);border-right:1px solid color-mix(in srgb,var(--text) 10%,transparent);padding:var(--table-pad);vertical-align:top;text-align:left;max-width:280px;word-break:break-word}th{background:var(--table-head);position:sticky;top:0;z-index:1;white-space:nowrap}.sort{border:0;background:transparent;font-weight:600;cursor:pointer;padding:0;color:var(--text)}.select{min-width:45px;text-align:center}code{font-family:var(--font-mono);font-size:11px}.hidden{display:none}#message{min-height:20px;color:var(--primary)}@media(max-width:760px){body{padding:14px}}@media(prefers-reduced-motion:reduce){*,*::before,*::after{transition-duration:.001ms!important;animation-duration:.001ms!important}}
+*{box-sizing:border-box}html,body{height:100%;overflow:hidden;background:#eef4fb}body{margin:0;padding:14px;display:grid;grid-template-rows:auto auto auto auto minmax(0,1fr);gap:8px;font-family:var(--font-body);color:var(--text);background:var(--page-bg)}h1,h2{font-family:var(--font-heading)}.report-head h1{margin:0 0 4px}.report-note{margin:0}.muted{color:var(--muted)}button,a,select,input{font:inherit;border:1px solid var(--border);border-radius:calc(var(--radius) * .6);padding:7px 9px;background:var(--input-bg);color:var(--text)}button,a{cursor:pointer}button:hover,a:hover{border-color:var(--primary)}button:focus-visible,a:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid color-mix(in srgb,var(--primary) 38%,transparent);outline-offset:2px}.primary{background:var(--primary)!important;color:var(--primary-contrast)!important;border-color:var(--primary)!important}.cards{display:flex;gap:8px;flex-wrap:wrap;min-height:0}.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:9px 12px;min-width:180px;box-shadow:var(--shadow)}.card h2{font-size:15px;margin:0 0 5px}.settings-card{min-width:min(100%,360px);line-height:1.45}.settings-card strong{display:inline-block;min-width:88px;color:var(--primary)}.toolbar{display:flex;gap:7px;flex-wrap:wrap;align-items:end;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:9px 11px;box-shadow:var(--shadow)}.toolbar label{display:grid;gap:3px;font-size:12px}.toolbar a{text-decoration:none}.top-scroll{overflow-x:auto;overflow-y:hidden;height:16px;border:1px solid var(--border);border-radius:8px;background:var(--surface)}.top-scroll-track{height:1px}.table-wrap{min-height:0;overflow:auto;border:1px solid var(--border);border-radius:calc(var(--radius) * .7);background:var(--surface);overscroll-behavior:contain}table{border-collapse:collapse;width:max-content;min-width:100%;background:var(--surface);font-size:12px}th,td{border-bottom:1px solid color-mix(in srgb,var(--text) 12%,transparent);border-right:1px solid color-mix(in srgb,var(--text) 10%,transparent);padding:var(--table-pad);vertical-align:top;text-align:left;max-width:280px;word-break:break-word}th{background:var(--table-head);position:sticky;top:0;z-index:1;white-space:nowrap}.sort{border:0;background:transparent;font-weight:600;cursor:pointer;padding:0;color:var(--text)}.select{min-width:45px;text-align:center}code{font-family:var(--font-mono);font-size:11px}.hidden{display:none}#message{min-height:20px;color:var(--primary)}@media(max-width:760px){body{padding:8px}.cards{flex-wrap:nowrap;overflow-x:auto}.toolbar{flex-wrap:nowrap;overflow-x:auto}}@media(prefers-reduced-motion:reduce){*,*::before,*::after{transition-duration:.001ms!important;animation-duration:.001ms!important}}
 </style></head><body>
 <div class="report-head"><h1>批量引物设计与特异性验证</h1><div class="muted">批次 ${escapeHtml(batch.name)} · 序列 ${summary.sequenceCount} · 候选 ${summary.candidateCount}</div></div>
-<p class="muted">输入序列坐标采用 1-based 闭区间；反向引物序列按 5′→3′显示，坐标区间按输入模板从小到大排列。</p>
+<p class="muted report-note">输入序列坐标采用 1-based 闭区间；反向引物序列按 5′→3′显示，坐标区间按输入模板从小到大排列。</p>
 <div class="cards">${settingsCard}${cards}</div>
 <div class="toolbar">
 <label>序列<select id="sequenceFilter"><option value="">全部</option>${options(dataRows.map((row) => row.sequenceId))}</select></label>
@@ -271,15 +286,17 @@ ${renderGlassThemeCss()}
 <button id="copyAll">复制全部</button><button id="copyFiltered">复制筛选结果</button><button id="copySelected" class="primary">复制选中行</button>
 <a href="summary.csv" download>下载 CSV</a><span id="message" role="status"></span>
 </div>
-<div class="table-wrap"><table id="results"><thead><tr>${headings}</tr></thead><tbody>${rows}</tbody></table></div>
+<div class="top-scroll" id="topScroll" aria-label="表格顶部横向滚动条"><div class="top-scroll-track" id="topScrollTrack"></div></div>
+<div class="table-wrap" id="tableWrap"><table id="results"><thead><tr>${headings}</tr></thead><tbody>${rows}</tbody></table></div>
 <script>
 const table=document.querySelector('#results');const body=table.tBodies[0];const headers=${JSON.stringify(BATCH_TABLE_HEADERS)};
 const filters={sequence:document.querySelector('#sequenceFilter'),assembly:document.querySelector('#assemblyFilter'),classification:document.querySelector('#classificationFilter'),rank:document.querySelector('#rankFilter')};
-function visibleRows(){return [...body.rows].filter(row=>!row.classList.contains('hidden'))}function applyFilters(){for(const row of body.rows){const ok=(!filters.sequence.value||row.dataset.sequence===filters.sequence.value)&&(!filters.assembly.value||row.dataset.assembly===filters.assembly.value)&&(!filters.classification.value||row.dataset.classification===filters.classification.value)&&(!filters.rank.value||Number(row.dataset.rank)<=Number(filters.rank.value));row.classList.toggle('hidden',!ok)}}Object.values(filters).forEach(control=>control.addEventListener('input',applyFilters));
+const tableWrap=document.querySelector('#tableWrap'),topScroll=document.querySelector('#topScroll'),topTrack=document.querySelector('#topScrollTrack');let syncing=false;function updateTopScroll(){topTrack.style.width=table.scrollWidth+'px';topScroll.scrollLeft=tableWrap.scrollLeft}topScroll.addEventListener('scroll',()=>{if(syncing)return;syncing=true;tableWrap.scrollLeft=topScroll.scrollLeft;syncing=false});tableWrap.addEventListener('scroll',()=>{if(syncing)return;syncing=true;topScroll.scrollLeft=tableWrap.scrollLeft;syncing=false});const resizeObserver=new ResizeObserver(updateTopScroll);resizeObserver.observe(table);resizeObserver.observe(tableWrap);window.addEventListener('resize',updateTopScroll);
+function visibleRows(){return [...body.rows].filter(row=>!row.classList.contains('hidden'))}function applyFilters(){for(const row of body.rows){const ok=(!filters.sequence.value||row.dataset.sequence===filters.sequence.value)&&(!filters.assembly.value||row.dataset.assembly===filters.assembly.value)&&(!filters.classification.value||row.dataset.classification===filters.classification.value)&&(!filters.rank.value||Number(row.dataset.rank)<=Number(filters.rank.value));row.classList.toggle('hidden',!ok)}requestAnimationFrame(updateTopScroll)}Object.values(filters).forEach(control=>control.addEventListener('input',applyFilters));
 function values(row){return [...row.cells].slice(1).map(cell=>(cell.dataset.copy||'').replace(/[\\t\\r\\n]+/g,' '))}function makeTsv(rows){return [headers.join('\\t'),...rows.map(row=>values(row).join('\\t'))].join('\\r\\n')}
 async function copyRows(rows){if(!rows.length){show('没有可复制的行');return}const text=makeTsv(rows);try{await navigator.clipboard.writeText(text)}catch{const area=document.createElement('textarea');area.value=text;area.style.position='fixed';area.style.opacity='0';document.body.append(area);area.select();document.execCommand('copy');area.remove()}show('已复制 '+rows.length+' 行，可直接粘贴到 Excel')}
 function show(text){const node=document.querySelector('#message');node.textContent=text;setTimeout(()=>{if(node.textContent===text)node.textContent=''},4000)}
 document.querySelector('#copyAll').onclick=()=>copyRows([...body.rows]);document.querySelector('#copyFiltered').onclick=()=>copyRows(visibleRows());document.querySelector('#copySelected').onclick=()=>copyRows([...body.rows].filter(row=>row.querySelector('input').checked));
-let sortState={column:-1,direction:1};document.querySelectorAll('.sort').forEach(button=>button.addEventListener('click',()=>{const column=Number(button.dataset.column);sortState.direction=sortState.column===column?-sortState.direction:1;sortState.column=column;const rows=[...body.rows];rows.sort((a,b)=>{const av=a.cells[column].dataset.sort||'',bv=b.cells[column].dataset.sort||'';const an=Number(av),bn=Number(bv);const result=av!==''&&bv!==''&&Number.isFinite(an)&&Number.isFinite(bn)?an-bn:av.localeCompare(bv,'zh-CN',{numeric:true});return result*sortState.direction});rows.forEach(row=>body.append(row))}));
+let sortState={column:-1,direction:1};document.querySelectorAll('.sort').forEach(button=>button.addEventListener('click',()=>{const column=Number(button.dataset.column);sortState.direction=sortState.column===column?-sortState.direction:1;sortState.column=column;const rows=[...body.rows];rows.sort((a,b)=>{const av=a.cells[column].dataset.sort||'',bv=b.cells[column].dataset.sort||'';const an=Number(av),bn=Number(bv);const result=av!==''&&bv!==''&&Number.isFinite(an)&&Number.isFinite(bn)?an-bn:av.localeCompare(bv,'zh-CN',{numeric:true});return result*sortState.direction});rows.forEach(row=>body.append(row));requestAnimationFrame(updateTopScroll)}));requestAnimationFrame(updateTopScroll);
 </script></body></html>`;
 }

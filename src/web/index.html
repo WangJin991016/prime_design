@@ -72,7 +72,11 @@
           <label>基因组产物最大长度（bp）
             <input id="validationMaxProductSize" type="text" inputmode="numeric" autocomplete="off" value="10000">
           </label>
+          <label>并行任务数（4–8）
+            <input id="validationParallelism" type="text" inputmode="numeric" autocomplete="off" value="4">
+          </label>
           <p class="muted">验证范围固定从 0 bp 开始；默认扫描到 10,000 bp，与上方 Primer3 模板设计范围相互独立。</p>
+          <p class="muted">默认 4 路；提高并发可能增加服务器 NFS 和内存压力，实际并发不会超过候选数。</p>
         </fieldset>
         <fieldset>
           <legend>GC 含量（%）</legend>
@@ -96,7 +100,6 @@
       <p id="progressText"></p>
       <div id="recordProgress"></div>
       <div class="actions"><button id="retryButton" class="hidden" type="button">从断点重试</button><div><a id="reportLink" class="button hidden" target="_blank">打开完整报告</a> <button id="previewReportButton" class="hidden" type="button">页面内预览</button></div></div>
-      <iframe id="reportFrame" class="hidden" title="引物设计报告"></iframe>
     </section>
 
     <section class="panel">
@@ -104,6 +107,18 @@
       <div id="history"></div>
     </section>
   </main>
+  <dialog id="reportDialog" aria-labelledby="reportDialogTitle">
+    <div class="report-dialog-shell">
+      <div class="report-dialog-header">
+        <strong id="reportDialogTitle">引物设计报告</strong>
+        <div class="report-dialog-actions">
+          <a id="reportDialogOpen" class="button" target="_blank">新标签页打开</a>
+          <button id="reportDialogClose" type="button">关闭</button>
+        </div>
+      </div>
+      <iframe id="reportFrame" title="引物设计报告"></iframe>
+    </div>
+  </dialog>
   <script type="module" src="/app.js"></script>
 </body>
 </html>

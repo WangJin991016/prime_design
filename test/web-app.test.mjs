@@ -34,11 +34,14 @@ test('web app binds to loopback and serves the local UI', async () => withApp(as
   assert.match(html, /id="batchAssembly"/);
   assert.match(html, /id="primer3Parameters"/);
   assert.match(html, /id="validationMaxProductSize"/);
+  assert.match(html, /id="validationParallelism"/);
   assert.match(html, /id="previewReportButton"/);
+  assert.match(html, /<dialog id="reportDialog"/);
+  assert.match(html, /id="reportDialogClose"/);
   assert.match(html, /id="exitButton"/);
   for (const id of [
     'numReturn', 'tmTargetC', 'tmToleranceC', 'primerLengthMin', 'primerLengthOpt',
-    'primerLengthMax', 'productSizeMin', 'productSizeMax', 'validationMaxProductSize',
+    'primerLengthMax', 'productSizeMin', 'productSizeMax', 'validationMaxProductSize', 'validationParallelism',
     'gcMinPercent', 'gcMaxPercent',
   ]) {
     assert.match(html, new RegExp(`id="${id}" type="text" inputmode="(?:numeric|decimal)"`));
@@ -59,8 +62,10 @@ test('session, health, and fixed glass CSS expose only safe local metadata', asy
   assert.equal(session.primer3.defaults.gcMinPercent, 40);
   assert.equal(session.primer3.constraints.numReturn.max, 20);
   assert.equal(session.validation.defaults.maxProductSize, 10000);
+  assert.equal(session.validation.defaults.parallelism, 4);
   assert.deepEqual(session.validation.constraints.maxProductSize, { min: 1000, max: 50000, integer: true });
   assert.equal(session.validation.constraints.minProductSize, 0);
+  assert.deepEqual(session.validation.constraints.parallelism, { min: 4, max: 8, integer: true });
   assert.equal(JSON.stringify(session).includes('remoteRoot'), false);
   assert.equal((await fetch(`${app.url}/api/themes`)).status, 404);
   assert.equal((await fetch(`${app.url}/themes.css`)).status, 404);
@@ -86,6 +91,12 @@ test('client loads reports on demand, slows hidden polling, and exposes recycle 
   const showResults = source.match(/async function showResults[\s\S]*?\n}/)?.[0] || '';
   assert.doesNotMatch(showResults, /\/results|reportFrame\.src/);
   assert.match(source, /previewReportButton/);
+  assert.match(source, /showModal\(\)/);
+  assert.match(source, /reportDialogClose/);
+  assert.match(source, /document\.body\.classList\.add\('report-open'\)/);
+  assert.match(source, /phase === 'database_check'/);
+  assert.match(source, /candidateCompleted/);
+  assert.match(source, /正在下载结果/);
   assert.match(source, /visibilitychange/);
   assert.match(source, /document\.hidden \? 10000 : 2000/);
   assert.match(source, /\/delete/);
@@ -208,13 +219,14 @@ async function isolatedDataRoot() {
   return root;
 }
 
-async function writeBatchFixture(dataRoot, batchId, { status = 'complete', candidateCount = 1 } = {}) {
+async function writeBatchFixture(dataRoot, batchId, { status = 'complete', candidateCount = 1, run = null } = {}) {
   const directory = path.join(dataRoot, 'batches', batchId);
   await mkdir(directory, { recursive: true });
   const batch = {
     batchId, name: batchId, status, candidateCount,
     createdAt: '2026-08-12T00:00:00.000Z', updatedAt: '2026-08-12T00:00:00.000Z',
     records: [{ sequenceId: 'seq_1', displayName: 'seq 1', assembly: 'hs1', length: 100 }],
+    ...(run ? { run } : {}),
   };
   await writeFile(path.join(directory, 'batch.json'), `${JSON.stringify(batch)}\n`, 'utf8');
   await writeFile(path.join(directory, 'checkpoint.json'), `${JSON.stringify({ records: [{ sequenceId: 'seq_1', stage: 'complete' }] })}\n`, 'utf8');
@@ -245,6 +257,32 @@ test('history and status stay lightweight when full result files are malformed',
     assert.equal(status.status, 200);
     assert.equal((await status.json()).records.length, 1);
     assert.equal((await fetch(`${app.url}/api/batches/lightweight-fixture/results`)).status, 500);
+  } finally {
+    if (app.server.listening) await new Promise((resolve) => app.server.close(resolve));
+    await recycleTestRoot(dataRoot);
+  }
+});
+
+test('status API exposes progress fields but redacts server and local paths', async () => {
+  const dataRoot = await isolatedDataRoot();
+  await writeBatchFixture(dataRoot, 'progress-fixture', { status: 'validation_running', run: {
+    tool: 'isPCR/BLAT', assembly: 'mm10', jobId: '2349343', runId: 'run-safe',
+    state: 'RUNNING', phase: 'ispcr', candidateTotal: 30, candidateCompleted: 8,
+    activeWorkers: 3, configuredParallelism: 4, actualParallelism: 4,
+    remoteRunDir: '/secret/remote/run', localRunDir: 'A:\\secret\\run',
+  } });
+  const app = await listenPrimerDesignApp({
+    projectRoot, appRoot: projectRoot, dataRoot, port: 0,
+    loadConfig: async () => ({ schemaVersion: 1 }),
+  });
+  try {
+    const body = await (await fetch(`${app.url}/api/batches/progress-fixture/status`)).json();
+    assert.equal(body.run.phase, 'ispcr');
+    assert.equal(body.run.candidateCompleted, 8);
+    assert.equal(body.run.activeWorkers, 3);
+    assert.equal(body.run.remoteRunDir, undefined);
+    assert.equal(body.run.localRunDir, undefined);
+    assert.doesNotMatch(JSON.stringify(body), /secret/);
   } finally {
     if (app.server.listening) await new Promise((resolve) => app.server.close(resolve));
     await recycleTestRoot(dataRoot);

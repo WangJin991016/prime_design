@@ -182,7 +182,7 @@ function publicStatus(view, live) {
     updatedAt: view.batch.updatedAt,
     sequenceCount: view.batch.records.length,
     candidateCount: Number.isInteger(view.candidateCount) ? view.candidateCount : (view.candidates?.length || 0),
-    run: view.batch.run || null,
+    run: publicRun(view.batch.run),
     records: view.batch.records.map((record) => {
       const state = view.checkpoint.records.find((item) => item.sequenceId === record.sequenceId);
       return {
@@ -195,6 +195,17 @@ function publicStatus(view, live) {
       };
     }),
   };
+}
+
+function publicRun(run) {
+  if (!run || typeof run !== 'object') return null;
+  const allowed = [
+    'tool', 'assembly', 'jobId', 'runId', 'state', 'phase', 'elapsedMs',
+    'candidateTotal', 'candidateCompleted', 'shardTotal', 'shardCompleted',
+    'activeWorkers', 'configuredParallelism', 'actualParallelism', 'blatCandidateTotal',
+    'downloadCompleted', 'downloadTotal', 'reattached', 'updatedAt',
+  ];
+  return Object.fromEntries(allowed.filter((key) => Object.hasOwn(run, key)).map((key) => [key, run[key]]));
 }
 
 function publicHistory(view, live) {
@@ -452,8 +463,10 @@ export function createPrimerDesignApp({
         }
         if (request.method === 'POST' && action === 'revalidate') {
           ensurePostAuthorized(request, token);
-          const body = exactObject(await readJsonBody(request), ['maxProductSize'], '重新验证请求');
-          if (typeof body.maxProductSize !== 'number') throw apiError(400, 'maxProductSize 必须是数字。');
+          const body = exactObject(await readJsonBody(request), ['maxProductSize', 'parallelism'], '重新验证请求');
+          if (typeof body.maxProductSize !== 'number' || typeof body.parallelism !== 'number') {
+            throw apiError(400, 'maxProductSize 和 parallelism 必须是数字。');
+          }
           const start = lifecycle.beginBatch(batchId);
           if (start.status === 'busy') throw apiError(409, `已有批次 ${start.activeBatchId} 正在运行，请等待完成。`);
           if (start.status === 'mutating') throw apiError(409, '该批次正在执行文件操作，请稍后再试。');
@@ -462,7 +475,11 @@ export function createPrimerDesignApp({
           setImmediate(async () => {
             try {
               liveRuns.set(batchId, { status: 'running', error: null });
-              await revalidateBatch({ batch: directory, 'max-product-size': body.maxProductSize });
+              await revalidateBatch({
+                batch: directory,
+                'max-product-size': body.maxProductSize,
+                parallelism: body.parallelism,
+              });
               const view = await loadBatchStatus(batchRoot, batchId);
               liveRuns.set(batchId, { status: view.batch.status, error: view.batch.lastError || null });
             } catch (error) {

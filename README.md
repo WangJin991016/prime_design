@@ -7,7 +7,7 @@ PrimerDesign 是一个仅在本机 `127.0.0.1` 上运行的批量引物设计网
 3. 对无产物、多产物或可疑候选执行后台单引物 BLAT 诊断。
 4. 生成可筛选、可复制到 Excel 的 HTML 报告和 UTF-8 CSV。
 
-软件版本：`0.4.0`。仅供当前用户非商业使用。
+软件版本：`0.5.0`。仅供当前用户非商业使用。
 
 ## 快速开始
 
@@ -44,6 +44,7 @@ npm run app
 - 模板设计产物：`80–1000 bp`。
 - GC：`40–60%`。
 - 基因组 isPCR 最大产物：`10000 bp`，网页允许 `1000–50000 bp`。
+- isPCR 默认 4 路并行，每批可调为 4–8 路；页面显示数据库校验、候选完成数、BLAT、下载、校验和报告阶段。
 
 每批实际参数都会冻结在批次 `config.json` 中。断点重试继续使用原参数，不会被后来修改的默认值覆盖。
 
@@ -61,7 +62,7 @@ FASTA 标题的第一个非空字段作为内部 ID，完整标题作为显示�
 - `summary.csv`：带 UTF-8 BOM 的 Excel 友好表格。
 - `report.html`：可离线打开的自包含报告。
 
-最终表格显示正反向引物、输入模板 1-based 闭区间、Tm、GC、Primer3 penalty、模板设计产物长度、基因组验证产物长度、基因组位置、产物数量和验证结论。后台 BLAT 明细保留在原始审计数据中，不在最终表格或公共结果接口显示。
+最终表格显示正反向引物、输入模板 1-based 闭区间、Tm、GC、Primer3 penalty、模板设计产物长度、基因组验证产物长度、基因组位置、产物数量和验证结论。多位点候选保留真实产物总数，但长度、位置和类别明细仅显示前 5 个。后台 BLAT 明细保留在原始审计数据中，不在最终表格或公共结果接口显示。
 
 历史批次的“删除”会将整个批次目录移入 Windows 回收站，不会永久删除；运行中的批次不能删除。
 
@@ -71,7 +72,7 @@ FASTA 标题的第一个非空字段作为内部 ID，完整标题作为显示�
 node .\src\cli.mjs help
 node .\src\cli.mjs batch-prepare --fasta A:\input.fa --manifest A:\batch.tsv --name example
 node .\src\cli.mjs batch-run --batch A:\CodexProject\prime_design\batches\<batch-id>
-node .\src\cli.mjs batch-revalidate --batch A:\CodexProject\prime_design\batches\<batch-id> --max-product-size 10000
+node .\src\cli.mjs batch-revalidate --batch A:\CodexProject\prime_design\batches\<batch-id> --max-product-size 10000 --parallelism 4
 node .\src\cli.mjs batch-report --batch A:\CodexProject\prime_design\batches\<batch-id>
 ```
 

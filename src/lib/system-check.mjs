@@ -38,7 +38,7 @@ function sshArgs(server) {
 }
 
 async function readSlurmResources(appRoot) {
-  const names = ['run-primer3.slurm', 'run-ispcr.slurm'];
+  const names = ['run-primer3.slurm', 'run-ispcr-parallel-v2.slurm'];
   const entries = [];
   for (const name of names) {
     const filePath = path.join(appRoot, 'scripts', 'server', name);

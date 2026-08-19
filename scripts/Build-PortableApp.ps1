@@ -42,6 +42,17 @@ function New-PortableZip {
     } finally { $zipStream.Dispose() }
 }
 
+function Get-Sha256Hex {
+    param([Parameter(Mandatory = $true)][string]$LiteralPath)
+    $stream = [IO.File]::Open($LiteralPath, 'Open', 'Read', 'ReadWrite,Delete')
+    try {
+        $sha256 = [Security.Cryptography.SHA256]::Create()
+        try {
+            return ([BitConverter]::ToString($sha256.ComputeHash($stream))).Replace('-', '').ToLowerInvariant()
+        } finally { $sha256.Dispose() }
+    } finally { $stream.Dispose() }
+}
+
 if (-not $NodeArchive) {
     $NodeArchive = Join-Path $projectRoot 'vendor\node\node-v24.18.0-win-x64.zip'
 }
@@ -103,7 +114,7 @@ foreach ($webFile in @('app.js','index.html','styles.css')) {
 }
 Copy-Item -LiteralPath (Join-Path $projectRoot 'config\default.example.json') -Destination (Join-Path $distRoot 'app\config\default.json')
 Copy-Item -LiteralPath (Join-Path $projectRoot 'scripts\Move-ToRecycleBin.ps1') -Destination (Join-Path $distRoot 'app\scripts\Move-ToRecycleBin.ps1')
-foreach ($serverScript in @('provision-primer3.slurm','provision-ucsc.slurm','run-ispcr.slurm','run-primer3.slurm')) {
+foreach ($serverScript in @('provision-primer3.slurm','provision-ucsc.slurm','run-ispcr.slurm','run-ispcr-parallel-v2.slurm','run-primer3.slurm')) {
     Copy-Item -LiteralPath (Join-Path $projectRoot "scripts\server\$serverScript") -Destination (Join-Path $distRoot "app\scripts\server\$serverScript")
 }
 
@@ -117,7 +128,7 @@ $manifest = Get-ChildItem -LiteralPath $distRoot -Recurse -File | Sort-Object Fu
     [pscustomobject]@{
         path = $_.FullName.Substring($distRoot.Length + 1).Replace('\','/')
         bytes = $_.Length
-        sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        sha256 = Get-Sha256Hex -LiteralPath $_.FullName
     }
 }
 $manifest | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $distRoot 'manifest.json') -Encoding UTF8
@@ -133,7 +144,7 @@ if (Test-Path -LiteralPath $zipPath) {
     )
 }
 New-PortableZip -SourceRoot $distRoot -DestinationPath $zipPath
-$zipHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$zipHash = Get-Sha256Hex -LiteralPath $zipPath
 Set-Content -LiteralPath "$zipPath.sha256" -Value "$zipHash  $(Split-Path $zipPath -Leaf)" -Encoding ASCII
 Write-Host "Portable app: $distRoot"
 Write-Host "ZIP: $zipPath"
