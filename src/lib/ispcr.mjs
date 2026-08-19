@@ -433,6 +433,16 @@ const REMOTE_PROGRESS_PHASES = new Set([
   'database_check', 'ispcr', 'blat', 'packaging', 'complete', 'failed',
 ]);
 
+export const REMOTE_PROGRESS_ERROR_LABELS = Object.freeze({
+  preflight_missing_dependency: '服务器缺少验证输入、工具或部署清单',
+  completed_output_exists: '服务器运行目录已存在完成结果',
+  query_validation_failed: '候选引物查询文件校验失败',
+  integrity_check_failed: 'isPCR、BLAT 或基因组数据库完整性校验失败',
+  shard_failed: 'isPCR 并行分片运行失败',
+  output_validation_failed: '服务器结果文件校验失败',
+  remote_job_failed: '服务器验证作业失败',
+});
+
 export function parseRemoteProgressStatus(text, expectedRunId) {
   const lines = String(text).split(/\r?\n/);
   const stateLine = lines.find((line) => line.startsWith('slurmState\t'));
@@ -455,6 +465,10 @@ export function parseRemoteProgressStatus(text, expectedRunId) {
     || numeric.actualParallelism > numeric.configuredParallelism) {
     throw new Error('远程 progress.tsv 计数范围无效。');
   }
+  const errorCode = progress.errorCode || null;
+  if (errorCode !== null && !Object.hasOwn(REMOTE_PROGRESS_ERROR_LABELS, errorCode)) {
+    throw new Error('远程 progress.tsv 错误码无效。');
+  }
   return {
     slurmState,
     progress: {
@@ -463,6 +477,7 @@ export function parseRemoteProgressStatus(text, expectedRunId) {
       phase: progress.phase,
       assembly: assertSafeId(progress.assembly, '进度 assembly'),
       ...numeric,
+      errorCode,
       updatedAtUtc: progress.updatedAtUtc || null,
     },
   };
@@ -491,7 +506,11 @@ export async function waitForIsPcrSlurmCompletion({
       });
       if (status.slurmState === 'COMPLETED') return { state: 'COMPLETED', elapsedMs: Date.now() - started };
       if (SLURM_FAILURE_STATES.has(status.slurmState)) {
-        throw new Error(`Slurm 作业 ${jobId} 结束于 ${status.slurmState}。`);
+        const detail = status.progress?.errorCode
+          ? `：${REMOTE_PROGRESS_ERROR_LABELS[status.progress.errorCode]}` : '';
+        const error = new Error(`Slurm 作业 ${jobId} 结束于 ${status.slurmState}${detail}。`);
+        error.code = status.progress?.errorCode || 'remote_job_failed';
+        throw error;
       }
     } catch (error) {
       if (/结束于/.test(error.message)) throw error;

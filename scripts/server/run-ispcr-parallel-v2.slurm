@@ -15,6 +15,26 @@ readonly ISPCR="$ROOT/bin/isPcr-v385"
 readonly BLAT="$ROOT/bin/blat-v385-bin"
 readonly GENOME_DIR="$ROOT/genomes"
 
+validate_query_file() {
+  awk -F '\t' 'NF { if (NF != 3 || seen[$1]++ || length($1) > 128 || $1 !~ /^[A-Za-z0-9][A-Za-z0-9._-]*$/ || $2 !~ /^[ACGTRYSWKMBDHVN]+$/ || $3 !~ /^[ACGTRYSWKMBDHVN]+$/) exit 2; count++ } END { if (count == 0) exit 2; print count }' "$1"
+}
+
+if [[ "${1:-}" == "--self-test" ]]; then
+  count="$(printf 'self_test\tACGTRYSWKMBDHVN\tTGCAYRSWMKVHDBN\n' | validate_query_file -)"
+  [[ "$count" == "1" ]] || exit 2
+  if printf 'duplicate\tACGT\tTGCA\nduplicate\tACGT\tTGCA\n' | validate_query_file - >/dev/null 2>&1; then exit 2; fi
+  if printf 'invalid\tACGTZ\tTGCA\n' | validate_query_file - >/dev/null 2>&1; then exit 2; fi
+  if printf 'columns\tACGT\n' | validate_query_file - >/dev/null 2>&1; then exit 2; fi
+  if validate_query_file /dev/null >/dev/null 2>&1; then exit 2; fi
+  printf 'self-test ok\n'
+  exit 0
+fi
+
+if [[ "${1:-}" == "--validate-stdin" ]]; then
+  validate_query_file -
+  exit $?
+fi
+
 if [[ "${1:-}" == "--status" ]]; then
   job_id="${2:-}"
   run_id="${3:-}"
@@ -57,18 +77,12 @@ readonly COMPLETED="$RUN_DIR/completed.tsv"
 readonly PROGRESS="$RUN_DIR/progress.tsv"
 readonly SHARD_DIR="$RUN_DIR/shards"
 readonly DATABASE="$GENOME_DIR/${ASSEMBLY}.2bit"
-[[ -x "$ISPCR" && -x "$BLAT" && -s "$QUERY" && -f "$ROOT/provision-manifest.tsv" ]]
-[[ ! -e "$COMPLETED" ]] || { printf 'Run already completed; refusing overwrite\n' >&2; exit 3; }
-
-awk -F '\t' 'NF {
-  if (NF != 3 || seen[$1]++ || length($1) > 128 || $1 !~ /^[A-Za-z0-9][A-Za-z0-9._-]*$/
-      || $2 !~ /^[ACGTRYSWKMBDHVN]+$/ || $3 !~ /^[ACGTRYSWKMBDHVN]+$/) exit 2
-}' "$QUERY" || { printf 'queries.tsv validation failed\n' >&2; exit 2; }
-readonly CANDIDATE_TOTAL="$(awk 'NF {n++} END {print n+0}' "$QUERY")"
-(( CANDIDATE_TOTAL > 0 )) || { printf 'queries.tsv is empty\n' >&2; exit 2; }
+[[ -d "$RUN_DIR" ]] || { printf 'Run directory is missing\n' >&2; exit 2; }
+readonly CANDIDATE_TOTAL="$(awk 'NF {n++} END {print n+0}' "$QUERY" 2>/dev/null || printf '0')"
 readonly ACTUAL_PARALLELISM="$(( CANDIDATE_TOTAL < PRIME_PARALLELISM ? CANDIDATE_TOTAL : PRIME_PARALLELISM ))"
 
 phase="database_check"
+error_code=""
 candidate_completed=0
 shard_completed=0
 active_workers=0
@@ -82,6 +96,7 @@ write_progress() {
     printf 'shardTotal\t%s\nshardCompleted\t%s\nactiveWorkers\t%s\n' "$ACTUAL_PARALLELISM" "$shard_completed" "$active_workers"
     printf 'configuredParallelism\t%s\nactualParallelism\t%s\n' "$PRIME_PARALLELISM" "$ACTUAL_PARALLELISM"
     printf 'blatCandidateTotal\t%s\nupdatedAtUtc\t%s\n' "$blat_candidate_total" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    [[ -z "$error_code" ]] || printf 'errorCode\t%s\n' "$error_code"
   } > "$tmp"
   mv "$tmp" "$PROGRESS"
 }
@@ -94,9 +109,11 @@ terminate_shards() {
 }
 mark_failed() {
   local status=$?
+  trap - EXIT
   if (( status != 0 )); then
     terminate_shards
     phase="failed"
+    [[ -n "$error_code" ]] || error_code="remote_job_failed"
     active_workers=0
     write_progress || true
   fi
@@ -105,6 +122,14 @@ mark_failed() {
 trap mark_failed EXIT
 
 write_progress
+[[ -x "$ISPCR" && -x "$BLAT" && -s "$QUERY" && -f "$ROOT/provision-manifest.tsv" ]] \
+  || { error_code="preflight_missing_dependency"; printf 'Required validation input or tool is missing\n' >&2; exit 2; }
+[[ ! -e "$COMPLETED" ]] \
+  || { error_code="completed_output_exists"; printf 'Run already completed; refusing overwrite\n' >&2; exit 3; }
+validated_candidate_total="$(validate_query_file "$QUERY")" \
+  || { error_code="query_validation_failed"; printf 'queries.tsv validation failed\n' >&2; exit 2; }
+[[ "$validated_candidate_total" == "$CANDIDATE_TOTAL" ]] \
+  || { error_code="query_validation_failed"; printf 'queries.tsv count changed during validation\n' >&2; exit 2; }
 readonly QUERY_SHA256="$(sha256sum "$QUERY" | awk '{print $1}')"
 readonly TOOL_SHA256="$(sha256sum "$ISPCR" | awk '{print $1}')"
 readonly BLAT_SHA256="$(sha256sum "$BLAT" | awk '{print $1}')"
@@ -114,7 +139,8 @@ readonly DATABASE_SHA256="$(sha256sum "$DATABASE" | awk '{print $1}')"
 readonly EXPECTED_TOOL_SHA256="$(awk -F '\t' '$1 == "tool" && $2 == "isPcr" {print $6}' "$ROOT/provision-manifest.tsv")"
 readonly EXPECTED_BLAT_SHA256="$(awk -F '\t' '$1 == "tool" && $2 == "blat" {print $6}' "$ROOT/provision-manifest.tsv")"
 readonly EXPECTED_DATABASE_SHA256="$(awk -F '\t' -v assembly="$ASSEMBLY" '$1 == "genome" && $2 == assembly {print $6}' "$ROOT/provision-manifest.tsv")"
-[[ "$TOOL_SHA256" == "$EXPECTED_TOOL_SHA256" && "$BLAT_SHA256" == "$EXPECTED_BLAT_SHA256" && "$DATABASE_SHA256" == "$EXPECTED_DATABASE_SHA256" ]]
+[[ "$TOOL_SHA256" == "$EXPECTED_TOOL_SHA256" && "$BLAT_SHA256" == "$EXPECTED_BLAT_SHA256" && "$DATABASE_SHA256" == "$EXPECTED_DATABASE_SHA256" ]] \
+  || { error_code="integrity_check_failed"; printf 'Tool or database SHA-256 validation failed\n' >&2; exit 2; }
 
 readonly PRIMERS_FASTA="$RUN_DIR/primers.fasta"
 [[ ! -e "$PRIMERS_FASTA" ]] || { printf 'Primer FASTA already exists; refusing overwrite\n' >&2; exit 3; }
@@ -164,9 +190,10 @@ while (( shard_completed < ACTUAL_PARALLELISM )); do
   new_shards=0
   new_candidates=0
   for (( shard=0; shard<ACTUAL_PARALLELISM; shard++ )); do
-    [[ ! -f "$SHARD_DIR/failed-$shard" ]] || { printf 'isPcr shard %s failed\n' "$shard" >&2; exit 5; }
+    [[ ! -f "$SHARD_DIR/failed-$shard" ]] || { error_code="shard_failed"; printf 'isPcr shard %s failed\n' "$shard" >&2; exit 5; }
     if [[ ! -f "$SHARD_DIR/done-$shard" ]] && ! kill -0 "${shard_pids[$shard]}" 2>/dev/null; then
       wait "${shard_pids[$shard]}" 2>/dev/null || true
+      error_code="shard_failed"
       printf 'isPcr shard %s exited without a completion marker\n' "$shard" >&2
       exit 5
     fi
@@ -203,7 +230,7 @@ readonly OUTPUT_TMP="$OUTPUT.tmp"
 cat "$SHARD_DIR"/result-*.bed > "$RUN_DIR/all-shards.bed.tmp"
 awk -F '\t' 'NR==FNR {order[$1]=NR; next} {if (!($4 in order)) exit 7; print order[$4] "\t" FNR "\t" $0}' \
   "$QUERY" "$RUN_DIR/all-shards.bed.tmp" | LC_ALL=C sort -t $'\t' -k1,1n -k2,2n | cut -f3- > "$OUTPUT_TMP"
-(( $(stat -Lc '%s' "$OUTPUT_TMP") <= 268435456 )) || { printf 'isPcr output exceeds 256 MiB\n' >&2; exit 4; }
+(( $(stat -Lc '%s' "$OUTPUT_TMP") <= 268435456 )) || { error_code="output_validation_failed"; printf 'isPcr output exceeds 256 MiB\n' >&2; exit 4; }
 mv "$OUTPUT_TMP" "$OUTPUT"
 
 readonly BLAT_OUTPUT="$RUN_DIR/${ASSEMBLY}.psl"
@@ -224,7 +251,7 @@ else
   : > "$BLAT_OUTPUT.tmp"
   blat_status="skipped_all_unique_primary"
 fi
-(( $(stat -Lc '%s' "$BLAT_OUTPUT.tmp") <= 268435456 )) || { printf 'BLAT output exceeds 256 MiB\n' >&2; exit 4; }
+(( $(stat -Lc '%s' "$BLAT_OUTPUT.tmp") <= 268435456 )) || { error_code="output_validation_failed"; printf 'BLAT output exceeds 256 MiB\n' >&2; exit 4; }
 mv "$BLAT_OUTPUT.tmp" "$BLAT_OUTPUT"
 
 phase="packaging"

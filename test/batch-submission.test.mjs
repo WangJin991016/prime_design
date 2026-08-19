@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  BROKEN_ISPCR_RUN_SCRIPT_SHA256,
   buildBatchSubmission,
+  buildKnownBrokenIsPcrExecutionUpgrade,
   buildWebBatchConfiguration,
   primer3ParametersForBatchConfig,
   validationCacheDescriptor,
@@ -118,4 +120,53 @@ test('legacy batch snapshots keep their recorded count and native GC behavior', 
   assert.equal(parameters.numReturn, 11);
   assert.deepEqual([parameters.gcMinPercent, parameters.gcMaxPercent], [20, 80]);
   assert.equal(legacy.primer3.parameters.gcMinPercent, undefined);
+});
+
+test('known broken isPCR runner upgrade changes only execution provenance fields', () => {
+  const fixedHash = 'f'.repeat(64);
+  const frozenServer = {
+    hostAlias: 'Fdu_imi', remoteRoot: '/safe/root',
+    slurmScript: '/safe/root/jobs/run-ispcr-parallel-v2.slurm',
+    progressProtocol: 'parallel_v1', expectedRunScriptSha256: BROKEN_ISPCR_RUN_SCRIPT_SHA256,
+    expectedDatabaseSha256: { mm10: 'd'.repeat(64) },
+  };
+  const config = {
+    schemaVersion: 1,
+    primer3: { parameters: { numReturn: 5 } },
+    ucsc: {
+      maxProductSize: 10000, parallelism: 4, minPerfect: 15, minGood: 15,
+      isPcrServer: frozenServer,
+    },
+  };
+  const currentConfig = {
+    ucsc: { isPcrServer: { ...frozenServer, expectedRunScriptSha256: fixedHash } },
+  };
+  const upgrade = buildKnownBrokenIsPcrExecutionUpgrade({
+    batch: { status: 'retryable_error' }, config, currentConfig,
+  });
+  assert.equal(upgrade.fromHash, BROKEN_ISPCR_RUN_SCRIPT_SHA256);
+  assert.equal(upgrade.toHash, fixedHash);
+  assert.equal(upgrade.updatedConfig.ucsc.isPcrServer.expectedRunScriptSha256, fixedHash);
+  assert.deepEqual(upgrade.updatedConfig.primer3, config.primer3);
+  assert.deepEqual(
+    { ...upgrade.updatedConfig.ucsc, isPcrServer: undefined },
+    { ...config.ucsc, isPcrServer: undefined },
+  );
+  assert.deepEqual(
+    { ...upgrade.updatedConfig.ucsc.isPcrServer, expectedRunScriptSha256: undefined },
+    { ...config.ucsc.isPcrServer, expectedRunScriptSha256: undefined },
+  );
+  assert.equal(config.ucsc.isPcrServer.expectedRunScriptSha256, BROKEN_ISPCR_RUN_SCRIPT_SHA256);
+  assert.equal(buildKnownBrokenIsPcrExecutionUpgrade({
+    batch: { status: 'complete' }, config, currentConfig,
+  }), null);
+  assert.equal(buildKnownBrokenIsPcrExecutionUpgrade({
+    batch: { status: 'retryable_error' },
+    config: { ...config, ucsc: { ...config.ucsc, isPcrServer: { ...frozenServer, expectedRunScriptSha256: 'a'.repeat(64) } } },
+    currentConfig,
+  }), null);
+  assert.throws(() => buildKnownBrokenIsPcrExecutionUpgrade({
+    batch: { status: 'retryable_error' }, config,
+    currentConfig: { ucsc: { isPcrServer: { ...currentConfig.ucsc.isPcrServer, remoteRoot: '/other/root' } } },
+  }), /安全升级/);
 });

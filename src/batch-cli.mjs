@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { copyFile, mkdir, readFile, stat } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import {
   ALLOWED_ASSEMBLIES,
@@ -48,6 +48,98 @@ async function loadBundle(batchDirectory) {
   ]);
   validateCheckpoint(checkpoint, batch);
   return { batchDir, batch, checkpoint, config };
+}
+
+export const BROKEN_ISPCR_RUN_SCRIPT_SHA256 = '81e79ef45395f1821a53276aa247322f562ada6dfc8dacb0572beb2250a94ada';
+
+function validSha256(value) {
+  return /^[a-f0-9]{64}$/i.test(String(value || ''));
+}
+
+export function buildKnownBrokenIsPcrExecutionUpgrade({ batch, config, currentConfig }) {
+  const frozen = config?.ucsc?.isPcrServer;
+  if (batch?.status !== 'retryable_error'
+    || frozen?.expectedRunScriptSha256?.toLowerCase() !== BROKEN_ISPCR_RUN_SCRIPT_SHA256) return null;
+  const current = currentConfig?.ucsc?.isPcrServer;
+  const safeIdentity = current
+    && frozen.hostAlias === current.hostAlias
+    && frozen.remoteRoot === current.remoteRoot
+    && frozen.slurmScript === current.slurmScript
+    && frozen.progressProtocol === 'parallel_v1'
+    && current.progressProtocol === 'parallel_v1';
+  if (!safeIdentity || !validSha256(current.expectedRunScriptSha256)
+    || current.expectedRunScriptSha256.toLowerCase() === BROKEN_ISPCR_RUN_SCRIPT_SHA256) {
+    throw new Error('当前批次使用已知故障的 isPCR 脚本，但无法从当前配置安全升级。');
+  }
+  const updatedConfig = structuredClone(config);
+  updatedConfig.ucsc.isPcrServer = {
+    ...updatedConfig.ucsc.isPcrServer,
+    slurmScript: current.slurmScript,
+    progressProtocol: current.progressProtocol,
+    expectedRunScriptSha256: current.expectedRunScriptSha256.toLowerCase(),
+  };
+  return {
+    updatedConfig,
+    fromHash: BROKEN_ISPCR_RUN_SCRIPT_SHA256,
+    toHash: current.expectedRunScriptSha256.toLowerCase(),
+    changedFields: [
+      'ucsc.isPcrServer.slurmScript',
+      'ucsc.isPcrServer.progressProtocol',
+      'ucsc.isPcrServer.expectedRunScriptSha256',
+    ],
+  };
+}
+
+export async function upgradeKnownBrokenIsPcrExecution(batchDirectory, currentConfig, now = new Date()) {
+  if (!currentConfig) return null;
+  const batchDir = assertADrive(path.resolve(batchDirectory), 'Batch directory');
+  const [batch, config] = await Promise.all([
+    readJson(path.join(batchDir, 'batch.json')),
+    readJson(path.join(batchDir, 'config.json')),
+  ]);
+  const upgrade = buildKnownBrokenIsPcrExecutionUpgrade({ batch, config, currentConfig });
+  if (!upgrade) return null;
+  const stamp = now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+  const auditDir = assertADrive(path.join(
+    batchDir, 'raw', 'execution-upgrades',
+    `${stamp}-${upgrade.fromHash.slice(0, 8)}-to-${upgrade.toHash.slice(0, 8)}`,
+  ), '执行配置升级审计目录');
+  await mkdir(path.dirname(auditDir), { recursive: true });
+  await mkdir(auditDir, { recursive: false });
+  const archivedFiles = [];
+  for (const name of ['config.json', 'batch.json']) {
+    await copyFile(path.join(batchDir, name), path.join(auditDir, name));
+    archivedFiles.push(name);
+  }
+  const resumeRoot = path.join(batchDir, 'raw', 'server-ispcr');
+  try {
+    const entries = await readdir(resumeRoot, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile() || !/^resume-[A-Za-z0-9._-]+\.json$/.test(entry.name)) continue;
+      await copyFile(path.join(resumeRoot, entry.name), path.join(auditDir, entry.name));
+      archivedFiles.push(entry.name);
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  const upgradedAt = now.toISOString();
+  const audit = {
+    schemaVersion: 1,
+    reason: 'ispcr_query_validator_hotfix_0.5.1',
+    upgradedAt,
+    fromRunScriptSha256: upgrade.fromHash,
+    toRunScriptSha256: upgrade.toHash,
+    changedFields: upgrade.changedFields,
+    archivedFiles,
+    failedJobId: batch.run?.jobId || null,
+    failedRunId: batch.run?.runId || null,
+  };
+  await writeJson(path.join(auditDir, 'upgrade-audit.json'), audit);
+  await writeJson(path.join(batchDir, 'config.json'), upgrade.updatedConfig);
+  batch.executionUpgrades = [...(batch.executionUpgrades || []), audit];
+  batch.updatedAt = upgradedAt;
+  await writeJson(path.join(batchDir, 'batch.json'), batch);
+  return { auditDir, audit };
 }
 
 async function readCandidates(batchDir) {
@@ -410,6 +502,7 @@ export async function batchValidateServer(options) {
         state: progress.state || batch.run?.state || 'UNKNOWN',
         phase: progress.phase || batch.run?.phase
           || (serverConfig.progressProtocol === 'parallel_v1' ? 'database_check' : 'legacy_slurm'),
+        errorCode: progress.errorCode || batch.run?.errorCode || null,
         elapsedMs: Number.isFinite(progress.elapsedMs) ? progress.elapsedMs : batch.run?.elapsedMs,
         candidateTotal: progress.candidateTotal ?? batch.run?.candidateTotal ?? subset.length,
         candidateCompleted: progress.candidateCompleted ?? batch.run?.candidateCompleted ?? 0,
@@ -500,6 +593,7 @@ export async function batchValidateServer(options) {
 
 export async function batchRevalidate(options) {
   const batchDirectory = required(options, 'batch');
+  await upgradeKnownBrokenIsPcrExecution(batchDirectory, options.executionConfig);
   const validation = normalizeIsPcrWebParameters({
     maxProductSize: Number(required(options, 'max-product-size')),
     parallelism: Number(options.parallelism ?? DEFAULT_ISPCR_WEB_PARAMETERS.parallelism),
@@ -573,6 +667,7 @@ export async function batchReport(options) {
 export async function batchRun(options) {
   const batchDir = required(options, 'batch');
   try {
+    await upgradeKnownBrokenIsPcrExecution(batchDir, options.executionConfig);
     const beforeDesign = await loadBundle(batchDir);
     beforeDesign.batch.status = 'primer3_running';
     beforeDesign.batch.updatedAt = new Date().toISOString();
@@ -628,9 +723,13 @@ export async function handleBatchCommand(command, options, context) {
   if (command === 'batch-prepare') await batchPrepare(options, context);
   else if (command === 'batch-design-primer3') await batchDesignPrimer3(options);
   else if (command === 'batch-validate-server') await batchValidateServer(options);
-  else if (command === 'batch-revalidate') await batchRevalidate(options);
+  else if (command === 'batch-revalidate') await batchRevalidate({
+    ...options, executionConfig: context?.loadConfig ? await context.loadConfig(options.config) : undefined,
+  });
   else if (command === 'batch-report') await batchReport(options);
-  else if (command === 'batch-run') await batchRun(options);
+  else if (command === 'batch-run') await batchRun({
+    ...options, executionConfig: context?.loadConfig ? await context.loadConfig(options.config) : undefined,
+  });
   else if (command === 'provision-primer3-server') await provisionPrimer3Server(options, context);
   else return false;
   return true;

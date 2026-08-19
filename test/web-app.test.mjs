@@ -81,6 +81,9 @@ test('session, health, and fixed glass CSS expose only safe local metadata', asy
   assert.match(baseCss, /#fastaFile::file-selector-button/);
   assert.match(baseCss, /\.record,\.history-row\{border:1px solid var\(--panel-border\)/);
   assert.match(baseCss, /\.history-actions\{display:flex/);
+  assert.match(baseCss, /#reportDialog\{position:fixed;inset:0;width:100%;height:100vh;height:100dvh/);
+  assert.match(baseCss, /\.report-dialog-header\{display:flex;[^}]*min-height:42px;padding:5px 10px/);
+  assert.match(baseCss, /#reportDialog iframe\{display:block;width:100%;height:100%/);
   assert.doesNotMatch(baseCss, /backdrop-filter|background-attachment\s*:\s*fixed/);
   assert.match(baseCss, /prefers-reduced-motion/);
   assert.match(REPORT_CSP, /frame-ancestors 'self'/);
@@ -230,6 +233,7 @@ async function writeBatchFixture(dataRoot, batchId, { status = 'complete', candi
   };
   await writeFile(path.join(directory, 'batch.json'), `${JSON.stringify(batch)}\n`, 'utf8');
   await writeFile(path.join(directory, 'checkpoint.json'), `${JSON.stringify({ records: [{ sequenceId: 'seq_1', stage: 'complete' }] })}\n`, 'utf8');
+  await writeFile(path.join(directory, 'input.fasta'), `>seq_1\n${'ACGT'.repeat(25)}\n`, 'utf8');
   return directory;
 }
 
@@ -269,6 +273,7 @@ test('status API exposes progress fields but redacts server and local paths', as
     tool: 'isPCR/BLAT', assembly: 'mm10', jobId: '2349343', runId: 'run-safe',
     state: 'RUNNING', phase: 'ispcr', candidateTotal: 30, candidateCompleted: 8,
     activeWorkers: 3, configuredParallelism: 4, actualParallelism: 4,
+    errorCode: 'query_validation_failed',
     remoteRunDir: '/secret/remote/run', localRunDir: 'A:\\secret\\run',
   } });
   const app = await listenPrimerDesignApp({
@@ -280,6 +285,7 @@ test('status API exposes progress fields but redacts server and local paths', as
     assert.equal(body.run.phase, 'ispcr');
     assert.equal(body.run.candidateCompleted, 8);
     assert.equal(body.run.activeWorkers, 3);
+    assert.equal(body.run.errorCode, 'query_validation_failed');
     assert.equal(body.run.remoteRunDir, undefined);
     assert.equal(body.run.localRunDir, undefined);
     assert.doesNotMatch(JSON.stringify(body), /secret/);
@@ -289,7 +295,7 @@ test('status API exposes progress fields but redacts server and local paths', as
   }
 });
 
-test('results API returns validated 1-based input-template primer intervals', async () => {
+test('results API returns only the requested final-report columns with combined 1-based intervals', async () => {
   const dataRoot = await isolatedDataRoot();
   const directory = await writeBatchFixture(dataRoot, 'position-fixture');
   await writeFile(path.join(directory, 'candidates.json'), `${JSON.stringify({
@@ -321,15 +327,25 @@ test('results API returns validated 1-based input-template primer intervals', as
     const response = await fetch(`${app.url}/api/batches/position-fixture/results`);
     assert.equal(response.status, 200);
     const body = await response.json();
-    assert.equal(body.rows[0].forward_input_start_1based, 11);
-    assert.equal(body.rows[0].forward_input_end_1based, 14);
-    assert.equal(body.rows[0].reverse_input_start_1based, 97);
-    assert.equal(body.rows[0].reverse_input_end_1based, 100);
-    assert.equal(body.rows[0].classificationLabel, '唯一产物');
-    assert.equal(body.rows[0].genomicProductLocations, 'chr1:11-100');
+    assert.deepEqual(Object.keys(body.rows[0]), [
+      'sequence_id', 'display_name', 'candidate_id', 'rank', 'forward_primer', 'reverse_primer',
+      'F_start_end', 'R_start_end', 'genomic_pcr_length', 'design_length', 'product_count',
+      'validation_classification', 'input_length', 'genomic_product_locations', 'assembly',
+      'forward_tm', 'reverse_tm', 'forward_gc', 'reverse_gc', 'score',
+      'genomic_product_classes', 'validation_products', 'warnings',
+    ]);
+    assert.equal(body.rows[0].F_start_end, '11-14');
+    assert.equal(body.rows[0].R_start_end, '97-100');
+    assert.equal(body.rows[0].validation_classification, '唯一产物');
+    assert.equal(body.rows[0].genomic_product_locations, 'chr1:11-100');
     assert.equal(Object.hasOwn(body.rows[0], 'blatForwardHits'), false);
     assert.equal(Object.hasOwn(body.rows[0], 'blatReviewStatus'), false);
     assert.doesNotMatch(JSON.stringify(body.rows[0]), /blat/i);
+    const fasta = await fetch(`${app.url}/batches/position-fixture/input.fasta`);
+    assert.equal(fasta.status, 200);
+    assert.match(fasta.headers.get('content-type'), /^text\/plain; charset=utf-8$/);
+    assert.match(fasta.headers.get('content-disposition'), /attachment; filename="position-fixture-input\.fasta"/);
+    assert.equal(await fasta.text(), `>seq_1\n${'ACGT'.repeat(25)}\n`);
   } finally {
     if (app.server.listening) await new Promise((resolve) => app.server.close(resolve));
     await recycleTestRoot(dataRoot);

@@ -14,6 +14,7 @@ import {
 import {
   DEFAULT_ISPCR_WEB_PARAMETERS,
   ISPCR_WEB_CONSTRAINTS,
+  REMOTE_PROGRESS_ERROR_LABELS,
 } from './lib/ispcr.mjs';
 import { checkLocalSystem, checkRemoteSystem } from './lib/system-check.mjs';
 import { moveDirectoryToRecycleBin } from './lib/recycle-bin.mjs';
@@ -203,9 +204,11 @@ function publicRun(run) {
     'tool', 'assembly', 'jobId', 'runId', 'state', 'phase', 'elapsedMs',
     'candidateTotal', 'candidateCompleted', 'shardTotal', 'shardCompleted',
     'activeWorkers', 'configuredParallelism', 'actualParallelism', 'blatCandidateTotal',
-    'downloadCompleted', 'downloadTotal', 'reattached', 'updatedAt',
+    'downloadCompleted', 'downloadTotal', 'reattached', 'errorCode', 'updatedAt',
   ];
-  return Object.fromEntries(allowed.filter((key) => Object.hasOwn(run, key)).map((key) => [key, run[key]]));
+  const result = Object.fromEntries(allowed.filter((key) => Object.hasOwn(run, key)).map((key) => [key, run[key]]));
+  if (result.errorCode && !Object.hasOwn(REMOTE_PROGRESS_ERROR_LABELS, result.errorCode)) delete result.errorCode;
+  return result;
 }
 
 function publicHistory(view, live) {
@@ -449,7 +452,7 @@ export function createPrimerDesignApp({
           setImmediate(async () => {
             try {
               liveRuns.set(batchId, { status: 'running', error: null });
-              await runBatch({ batch: directory });
+              await runBatch({ batch: directory, executionConfig: await loadConfig() });
               const view = await loadBatchStatus(batchRoot, batchId);
               liveRuns.set(batchId, { status: view.batch.status, error: view.batch.lastError || null });
             } catch (error) {
@@ -479,6 +482,7 @@ export function createPrimerDesignApp({
                 batch: directory,
                 'max-product-size': body.maxProductSize,
                 parallelism: body.parallelism,
+                executionConfig: await loadConfig(),
               });
               const view = await loadBatchStatus(batchRoot, batchId);
               liveRuns.set(batchId, { status: view.batch.status, error: view.batch.lastError || null });
@@ -511,14 +515,17 @@ export function createPrimerDesignApp({
         throw apiError(405, '不支持的请求方法。');
       }
 
-      const artifact = pathname.match(/^\/batches\/([^/]+)\/(report\.html|summary\.csv)$/);
+      const artifact = pathname.match(/^\/batches\/([^/]+)\/(report\.html|summary\.csv|input\.fasta)$/);
       if (request.method === 'GET' && artifact) {
         const [, batchId, file] = artifact;
         const directory = batchPath(batchRoot, batchId);
-        const type = file.endsWith('.csv') ? 'text/csv; charset=utf-8' : 'text/html; charset=utf-8';
+        const type = file.endsWith('.csv')
+          ? 'text/csv; charset=utf-8'
+          : (file.endsWith('.fasta') ? 'text/plain; charset=utf-8' : 'text/html; charset=utf-8');
         const headers = securityHeaders(type);
         if (file.endsWith('.html')) headers['content-security-policy'] = REPORT_CSP;
         if (file.endsWith('.csv')) headers['content-disposition'] = `attachment; filename="${batchId}-summary.csv"`;
+        if (file.endsWith('.fasta')) headers['content-disposition'] = `attachment; filename="${batchId}-input.fasta"`;
         response.writeHead(200, headers);
         response.end(await readFile(path.join(directory, file)));
         return;

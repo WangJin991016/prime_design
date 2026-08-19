@@ -95,6 +95,10 @@ function inputTemplatePositions(candidate, source) {
   };
 }
 
+function intervalText(start, end) {
+  return start === '' || end === '' ? '' : `${start}-${end}`;
+}
+
 export function buildBatchRows({ batch, candidates, results = {} }) {
   if (candidates.some((candidate) => candidate.engine !== 'primer3')) {
     throw new Error('Batch reports support Primer3 candidates only.');
@@ -111,36 +115,34 @@ export function buildBatchRows({ batch, candidates, results = {} }) {
     const source = records.get(candidate.sequenceId);
     const templatePositions = inputTemplatePositions(candidate, source);
     return {
-      sequenceId: candidate.sequenceId,
-      displayName: source?.displayName || source?.header || candidate.sequenceId,
-      templateLengthBp: source?.length ?? '',
+      sequence_id: candidate.sequenceId,
+      display_name: source?.displayName || source?.header || candidate.sequenceId,
+      candidate_id: candidate.candidateId,
+      rank: candidate.pairRank,
+      forward_primer: candidate.forwardSequence,
+      reverse_primer: candidate.reverseSequence,
+      F_start_end: intervalText(
+        templatePositions.forward_input_start_1based,
+        templatePositions.forward_input_end_1based,
+      ),
+      R_start_end: intervalText(
+        templatePositions.reverse_input_start_1based,
+        templatePositions.reverse_input_end_1based,
+      ),
+      genomic_pcr_length: displayedProductText(products, (product) => product.productSize),
+      design_length: candidate.productLength ?? '',
+      product_count: result ? products.length : '',
+      validation_classification: classificationLabel(classification),
+      input_length: source?.length ?? '',
+      genomic_product_locations: displayedProductText(products, (product) => product.location),
       assembly: candidate.assembly,
-      engine: 'primer3',
-      candidateId: candidate.candidateId,
-      pairRank: candidate.pairRank,
-      forwardPrimer: candidate.forwardSequence,
-      reversePrimer: candidate.reverseSequence,
-      forward_input_start_1based: templatePositions.forward_input_start_1based,
-      forward_input_end_1based: templatePositions.forward_input_end_1based,
-      reverse_input_start_1based: templatePositions.reverse_input_start_1based,
-      reverse_input_end_1based: templatePositions.reverse_input_end_1based,
-      forwardTm: candidate.forwardTm ?? '',
-      reverseTm: candidate.reverseTm ?? '',
-      forwardGc: candidate.forwardGc ?? '',
-      reverseGc: candidate.reverseGc ?? '',
-      productLengthDesign: candidate.productLength ?? '',
-      templateProductLengthBp: candidate.productLength ?? '',
-      scoreType: 'Primer3 penalty',
-      score: candidate.pairPenalty,
-      classification,
-      classificationLabel: classificationLabel(classification),
-      validationProductCount: result ? products.length : '',
-      genomicProductLengths: displayedProductText(products, (product) => product.productSize),
-      genomicProductLengthsBp: products.slice(0, MAX_DISPLAYED_GENOMIC_PRODUCTS)
-        .map((product) => product.productSize),
-      genomicProductLocations: displayedProductText(products, (product) => product.location),
-      genomicProductClasses: displayedProductText(products, (product) => product.contigClass),
-      validationProducts: displayedProductText(
+      forward_tm: candidate.forwardTm ?? '',
+      reverse_tm: candidate.reverseTm ?? '',
+      forward_gc: candidate.forwardGc ?? '',
+      reverse_gc: candidate.reverseGc ?? '',
+      score: candidate.pairPenalty ?? '',
+      genomic_product_classes: displayedProductText(products, (product) => product.contigClass),
+      validation_products: displayedProductText(
         products,
         (product) => `${product.location} (${product.productSize} bp${product.contigClass ? `, ${product.contigClass}` : ''})`,
       ),
@@ -157,37 +159,27 @@ export function summarizeBatch({ batch, candidates, results = {} }) {
     engines: {
       primer3: {
         candidateCount: rows.length,
-        passSingleProduct: rows.filter((row) => row.classification === 'pass_single_product').length,
-        multipleLoci: rows.filter((row) => row.classification === 'fail_multiple_loci').length,
-        noProduct: rows.filter((row) => row.classification === 'no_product').length,
-        review: rows.filter((row) => row.classificationLabel === '需复核').length,
-        failed: rows.filter((row) => row.classificationLabel === '验证失败').length,
-        pending: rows.filter((row) => row.classification === 'pending').length,
+        passSingleProduct: rows.filter((row) => row.validation_classification === '唯一产物').length,
+        multipleLoci: rows.filter((row) => row.validation_classification === '多位点').length,
+        noProduct: rows.filter((row) => row.validation_classification === '无产物').length,
+        review: rows.filter((row) => row.validation_classification === '需复核').length,
+        failed: rows.filter((row) => row.validation_classification === '验证失败').length,
+        pending: rows.filter((row) => row.validation_classification === '待验证').length,
       },
     },
   };
 }
 
 export const BATCH_TABLE_HEADERS = Object.freeze([
-  'sequence_id', 'display_name', 'input_template_length_bp', 'assembly', 'engine', 'candidate_id', 'pair_rank',
-  'forward_primer', 'forward_input_start_1based', 'forward_input_end_1based',
-  'reverse_primer', 'reverse_input_start_1based', 'reverse_input_end_1based',
-  'forward_tm', 'reverse_tm', 'forward_gc', 'reverse_gc',
-  'product_length_design', 'score_type', 'score', 'validation_classification',
-  'validation_product_count', 'genomic_product_lengths_bp', 'genomic_product_locations',
+  'sequence_id', 'display_name', 'candidate_id', 'rank', 'forward_primer', 'reverse_primer',
+  'F_start_end', 'R_start_end', 'genomic_pcr_length', 'design_length', 'product_count',
+  'validation_classification', 'input_length', 'genomic_product_locations', 'assembly',
+  'forward_tm', 'reverse_tm', 'forward_gc', 'reverse_gc', 'score',
   'genomic_product_classes', 'validation_products', 'warnings',
 ]);
 
 function rowValues(row) {
-  return [
-    row.sequenceId, row.displayName, row.templateLengthBp, row.assembly, row.engine, row.candidateId, row.pairRank,
-    row.forwardPrimer, row.forward_input_start_1based, row.forward_input_end_1based,
-    row.reversePrimer, row.reverse_input_start_1based, row.reverse_input_end_1based,
-    row.forwardTm, row.reverseTm, row.forwardGc, row.reverseGc,
-    row.productLengthDesign, row.scoreType, row.score, row.classificationLabel,
-    row.validationProductCount, row.genomicProductLengths, row.genomicProductLocations,
-    row.genomicProductClasses, row.validationProducts, row.warnings,
-  ];
+  return BATCH_TABLE_HEADERS.map((header) => row[header]);
 }
 
 export function renderBatchCsv({ batch = { records: [] }, candidates, results = {} }) {
@@ -262,7 +254,7 @@ export function renderBatchReport({ batch, candidates, results = {}, config = nu
       const code = header === 'forward_primer' || header === 'reverse_primer';
       return `<td data-copy="${escapeHtml(tsvSafe(value))}" data-sort="${escapeHtml(value)}">${code ? `<code>${escapeHtml(value)}</code>` : escapeHtml(value)}</td>`;
     }).join('');
-    return `<tr data-sequence="${escapeHtml(row.sequenceId)}" data-assembly="${escapeHtml(row.assembly)}" data-classification="${escapeHtml(row.classificationLabel)}" data-rank="${escapeHtml(row.pairRank)}"><td class="select"><input type="checkbox" aria-label="选择 ${escapeHtml(row.candidateId)}"></td>${rendered}</tr>`;
+    return `<tr data-sequence="${escapeHtml(row.sequence_id)}" data-assembly="${escapeHtml(row.assembly)}" data-classification="${escapeHtml(row.validation_classification)}" data-rank="${escapeHtml(row.rank)}"><td class="select"><input type="checkbox" aria-label="选择 ${escapeHtml(row.candidate_id)}"></td>${rendered}</tr>`;
   }).join('\n');
   const headings = ['', ...BATCH_TABLE_HEADERS].map((value, index) => index === 0
     ? '<th class="select">选择</th>'
@@ -273,18 +265,18 @@ export function renderBatchReport({ batch, candidates, results = {}, config = nu
 <title>批量引物设计与特异性验证 - ${escapeHtml(batch.name)}</title>
 <style>
 ${renderGlassThemeCss()}
-*{box-sizing:border-box}html,body{height:100%;overflow:hidden;background:#eef4fb}body{margin:0;padding:14px;display:grid;grid-template-rows:auto auto auto auto minmax(0,1fr);gap:8px;font-family:var(--font-body);color:var(--text);background:var(--page-bg)}h1,h2{font-family:var(--font-heading)}.report-head h1{margin:0 0 4px}.report-note{margin:0}.muted{color:var(--muted)}button,a,select,input{font:inherit;border:1px solid var(--border);border-radius:calc(var(--radius) * .6);padding:7px 9px;background:var(--input-bg);color:var(--text)}button,a{cursor:pointer}button:hover,a:hover{border-color:var(--primary)}button:focus-visible,a:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid color-mix(in srgb,var(--primary) 38%,transparent);outline-offset:2px}.primary{background:var(--primary)!important;color:var(--primary-contrast)!important;border-color:var(--primary)!important}.cards{display:flex;gap:8px;flex-wrap:wrap;min-height:0}.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:9px 12px;min-width:180px;box-shadow:var(--shadow)}.card h2{font-size:15px;margin:0 0 5px}.settings-card{min-width:min(100%,360px);line-height:1.45}.settings-card strong{display:inline-block;min-width:88px;color:var(--primary)}.toolbar{display:flex;gap:7px;flex-wrap:wrap;align-items:end;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:9px 11px;box-shadow:var(--shadow)}.toolbar label{display:grid;gap:3px;font-size:12px}.toolbar a{text-decoration:none}.top-scroll{overflow-x:auto;overflow-y:hidden;height:16px;border:1px solid var(--border);border-radius:8px;background:var(--surface)}.top-scroll-track{height:1px}.table-wrap{min-height:0;overflow:auto;border:1px solid var(--border);border-radius:calc(var(--radius) * .7);background:var(--surface);overscroll-behavior:contain}table{border-collapse:collapse;width:max-content;min-width:100%;background:var(--surface);font-size:12px}th,td{border-bottom:1px solid color-mix(in srgb,var(--text) 12%,transparent);border-right:1px solid color-mix(in srgb,var(--text) 10%,transparent);padding:var(--table-pad);vertical-align:top;text-align:left;max-width:280px;word-break:break-word}th{background:var(--table-head);position:sticky;top:0;z-index:1;white-space:nowrap}.sort{border:0;background:transparent;font-weight:600;cursor:pointer;padding:0;color:var(--text)}.select{min-width:45px;text-align:center}code{font-family:var(--font-mono);font-size:11px}.hidden{display:none}#message{min-height:20px;color:var(--primary)}@media(max-width:760px){body{padding:8px}.cards{flex-wrap:nowrap;overflow-x:auto}.toolbar{flex-wrap:nowrap;overflow-x:auto}}@media(prefers-reduced-motion:reduce){*,*::before,*::after{transition-duration:.001ms!important;animation-duration:.001ms!important}}
+*{box-sizing:border-box}html,body{height:100%;overflow:hidden;background:#eef4fb}body{margin:0;padding:6px;display:grid;grid-template-rows:auto auto auto auto minmax(0,1fr);gap:4px;font-family:var(--font-body);color:var(--text);background:var(--page-bg)}h1,h2{font-family:var(--font-heading)}.report-head{display:flex;align-items:baseline;gap:12px;min-width:0}.report-head h1{margin:0;flex:0 0 auto;font-size:20px}.report-head .muted{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.report-note{margin:0;font-size:11px;line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.muted{color:var(--muted)}button,a,select,input{font:inherit;border:1px solid var(--border);border-radius:calc(var(--radius) * .6);padding:5px 7px;background:var(--input-bg);color:var(--text)}button,a{cursor:pointer}button:hover,a:hover{border-color:var(--primary)}button:focus-visible,a:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid color-mix(in srgb,var(--primary) 38%,transparent);outline-offset:2px}.primary{background:var(--primary)!important;color:var(--primary-contrast)!important;border-color:var(--primary)!important}.cards{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:5px;min-height:0}.card{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));align-items:center;gap:3px 10px;min-width:0;padding:5px 8px;background:var(--surface);border:1px solid var(--border);border-radius:calc(var(--radius) * .72);box-shadow:var(--shadow);font-size:11px;line-height:1.25}.card h2{grid-column:1/-1;font-size:13px;margin:0}.settings-card{min-width:0;line-height:1.25}.settings-card strong{display:inline;margin-right:4px;color:var(--primary)}.toolbar{display:flex;gap:5px;flex-wrap:nowrap;align-items:end;min-height:0;overflow-x:auto;background:var(--surface);border:1px solid var(--border);border-radius:calc(var(--radius) * .72);padding:5px 7px;box-shadow:var(--shadow)}.toolbar label{display:grid;gap:2px;flex:0 0 auto;font-size:11px}.toolbar a{text-decoration:none;white-space:nowrap}.toolbar button{white-space:nowrap}.top-scroll{overflow-x:auto;overflow-y:hidden;height:14px;border:1px solid var(--border);border-radius:7px;background:var(--surface)}.top-scroll-track{height:1px}.table-wrap{min-height:0;overflow:auto;border:1px solid var(--border);border-radius:calc(var(--radius) * .55);background:var(--surface);overscroll-behavior:contain}table{border-collapse:collapse;width:max-content;min-width:100%;background:var(--surface);font-size:12px}th,td{border-bottom:1px solid color-mix(in srgb,var(--text) 12%,transparent);border-right:1px solid color-mix(in srgb,var(--text) 10%,transparent);padding:var(--table-pad);vertical-align:top;text-align:left;max-width:280px;word-break:break-word}th{background:var(--table-head);position:sticky;top:0;z-index:1;white-space:nowrap}.sort{border:0;background:transparent;font-weight:600;cursor:pointer;padding:0;color:var(--text)}.select{min-width:45px;text-align:center}code{font-family:var(--font-mono);font-size:11px}.hidden{display:none}#message{min-height:18px;color:var(--primary)}@media(max-width:900px){.cards{display:flex;overflow-x:auto}.card{flex:0 0 560px}.toolbar{overflow-x:auto}}@media(max-width:760px){body{padding:4px}.report-head h1{font-size:17px}.report-head{gap:8px}.card{flex-basis:520px}}@media(prefers-reduced-motion:reduce){*,*::before,*::after{transition-duration:.001ms!important;animation-duration:.001ms!important}}
 </style></head><body>
 <div class="report-head"><h1>批量引物设计与特异性验证</h1><div class="muted">批次 ${escapeHtml(batch.name)} · 序列 ${summary.sequenceCount} · 候选 ${summary.candidateCount}</div></div>
 <p class="muted report-note">输入序列坐标采用 1-based 闭区间；反向引物序列按 5′→3′显示，坐标区间按输入模板从小到大排列。</p>
 <div class="cards">${settingsCard}${cards}</div>
 <div class="toolbar">
-<label>序列<select id="sequenceFilter"><option value="">全部</option>${options(dataRows.map((row) => row.sequenceId))}</select></label>
-<label>assembly<select id="assemblyFilter"><option value="">全部</option>${options(dataRows.map((row) => row.assembly))}</select></label>
-<label>验证结论<select id="classificationFilter"><option value="">全部</option>${options(dataRows.map((row) => row.classificationLabel))}</select></label>
+  <label>序列<select id="sequenceFilter"><option value="">全部</option>${options(dataRows.map((row) => row.sequence_id))}</select></label>
+  <label>assembly<select id="assemblyFilter"><option value="">全部</option>${options(dataRows.map((row) => row.assembly))}</select></label>
+  <label>验证结论<select id="classificationFilter"><option value="">全部</option>${options(dataRows.map((row) => row.validation_classification))}</select></label>
 <label>最大排名<input id="rankFilter" type="number" min="1" placeholder="不限"></label>
 <button id="copyAll">复制全部</button><button id="copyFiltered">复制筛选结果</button><button id="copySelected" class="primary">复制选中行</button>
-<a href="summary.csv" download>下载 CSV</a><span id="message" role="status"></span>
+  <a href="summary.csv" download>下载 CSV</a><a href="input.fasta" download>下载原始 FASTA</a><span id="message" role="status"></span>
 </div>
 <div class="top-scroll" id="topScroll" aria-label="表格顶部横向滚动条"><div class="top-scroll-track" id="topScrollTrack"></div></div>
 <div class="table-wrap" id="tableWrap"><table id="results"><thead><tr>${headings}</tr></thead><tbody>${rows}</tbody></table></div>

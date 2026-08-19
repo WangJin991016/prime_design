@@ -39,6 +39,12 @@ test('isPCR runs single-primer BLAT only for candidates needing review', async (
   assert.match(source, /\(\(NR-1\)%total\)==shard/);
   assert.match(source, /progress\.tsv/);
   assert.match(source, /--status/);
+  assert.match(source, /--self-test/);
+  assert.match(source, /--validate-stdin/);
+  assert.match(source, /query_validation_failed/);
+  assert.match(source, /integrity_check_failed/);
+  assert.match(source, /shard_failed/);
+  assert.doesNotMatch(source, /\*\$\/\s*\n\s*\|\| \$2 !~/);
   assert.match(source, /failed-\$shard/);
   assert.match(source, /exited without a completion marker/);
   assert.match(source, /terminate_shards/);

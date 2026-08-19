@@ -56,7 +56,7 @@
       "expectedIsPcrVersion": "v385",
       "expectedBlatVersion": "v385",
       "expectedProvisionManifestSha256": "8ba825ef93b2b840b4c981207cfd633cf2a8ab1ff425258022a7f19681ef935d",
-      "expectedRunScriptSha256": "81e79ef45395f1821a53276aa247322f562ada6dfc8dacb0572beb2250a94ada",
+      "expectedRunScriptSha256": "c37045aedff1f91cc65a1cbdc6241a5110ad46e6c5cca5512420f9a9c130e8fc",
       "expectedDatabaseSha256": {
         "mm10": "4de06ca0bfca5417ae3782c09cf2caf7afc97c190172f60dc07b783f1bc6f39d",
         "hg38": "1f67aaa17a77b327738fe750ab37430a85dddf73c7d9189385ad1839259acec0",

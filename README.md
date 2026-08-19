@@ -7,7 +7,7 @@ PrimerDesign 是一个仅在本机 `127.0.0.1` 上运行的批量引物设计网
 3. 对无产物、多产物或可疑候选执行后台单引物 BLAT 诊断。
 4. 生成可筛选、可复制到 Excel 的 HTML 报告和 UTF-8 CSV。
 
-软件版本：`0.5.0`。仅供当前用户非商业使用。
+软件版本：`0.5.4`。仅供当前用户非商业使用。本版本按最终指定顺序输出 23 列，并使用 `rank`、`genomic_pcr_length`、`design_length` 和 `product_count` 等简写列名。
 
 ## 快速开始
 
@@ -60,6 +60,8 @@ FASTA 标题的第一个非空字段作为内部 ID，完整标题作为显示�
 - `candidates.json`：标准化候选引物。
 - `ucsc-results.json`：isPCR 与后台诊断的完整审计结果。
 - `summary.csv`：带 UTF-8 BOM 的 Excel 友好表格。
+
+最终报告工具栏可直接下载 `summary.csv` 和本批实际用于设计的 `input.fasta`。
 - `report.html`：可离线打开的自包含报告。
 
 最终表格显示正反向引物、输入模板 1-based 闭区间、Tm、GC、Primer3 penalty、模板设计产物长度、基因组验证产物长度、基因组位置、产物数量和验证结论。多位点候选保留真实产物总数，但长度、位置和类别明细仅显示前 5 个。后台 BLAT 明细保留在原始审计数据中，不在最终表格或公共结果接口显示。

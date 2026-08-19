@@ -86,6 +86,36 @@ test('remote progress status validates phases, counters, and run identity', () =
   );
   assert.throws(() => parseRemoteProgressStatus(payload.replace('run-1', 'wrong'), 'run-1'), /不一致/);
   assert.throws(() => parseRemoteProgressStatus(payload.replace('candidateCompleted\t8', 'candidateCompleted\t31'), 'run-1'), /范围/);
+  const failed = parseRemoteProgressStatus(
+    payload.replace('slurmState\tRUNNING', 'slurmState\tFAILED')
+      .replace('phase\tispcr', 'phase\tfailed')
+      .replace('updatedAtUtc\t2026-08-18T12:00:00Z', 'errorCode\tquery_validation_failed\nupdatedAtUtc\t2026-08-18T12:00:00Z'),
+    'run-1',
+  );
+  assert.equal(failed.progress.errorCode, 'query_validation_failed');
+  assert.throws(() => parseRemoteProgressStatus(
+    payload.replace('phase\tispcr', 'phase\tfailed')
+      .replace('updatedAtUtc\t2026-08-18T12:00:00Z', 'errorCode\tserver_path_leak\nupdatedAtUtc\t2026-08-18T12:00:00Z'),
+    'run-1',
+  ), /错误码无效/);
+});
+
+test('parallel isPCR terminal failure reports the safe remote error reason', async () => {
+  const progressServer = validateIsPcrServerConfig({
+    hostAlias: 'server', remoteRoot: '/safe/root',
+    slurmScript: '/safe/root/jobs/run-ispcr-parallel-v2.slurm',
+    supportedAssemblies: ['mm10'], progressProtocol: 'parallel_v1',
+  });
+  await assert.rejects(() => waitForIsPcrSlurmCompletion({
+    server: progressServer, jobId: '2349884', runId: 'run-1', timeoutMs: 1000, pollMs: 0,
+    runner: async () => ({ stdout: [
+      'slurmState\tFAILED', 'progressBegin', 'key\tvalue', 'schemaVersion\t1',
+      'runId\trun-1', 'phase\tfailed', 'assembly\tmm10', 'candidateTotal\t30',
+      'candidateCompleted\t0', 'shardTotal\t4', 'shardCompleted\t0', 'activeWorkers\t0',
+      'configuredParallelism\t4', 'actualParallelism\t4', 'blatCandidateTotal\t0',
+      'errorCode\tquery_validation_failed', 'updatedAtUtc\t2026-08-19T01:04:50Z', 'progressEnd', '',
+    ].join('\n'), stderr: '' }),
+  }), /候选引物查询文件校验失败/);
 });
 
 test('parallel isPCR polling uses one SSH call per sample and reports monotonic shard progress', async () => {

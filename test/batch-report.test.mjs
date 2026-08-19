@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  BATCH_TABLE_HEADERS,
   buildBatchRows,
   MAX_DISPLAYED_GENOMIC_PRODUCTS,
   renderBatchCsv,
@@ -41,6 +42,7 @@ test('batch report summarizes the Primer3-only workflow', () => {
   assert.match(html, /批量引物设计与特异性验证/);
   assert.match(html, /复制筛选结果/);
   assert.match(html, /summary\.csv/);
+  assert.match(html, /href="input\.fasta" download>下载原始 FASTA/);
   assert.match(html, /data-theme="glass-laboratory"/);
   assert.match(html, /本批设计设置/);
   assert.match(html, /候选引物对<\/strong> 5/);
@@ -52,6 +54,10 @@ test('batch report summarizes the Primer3-only workflow', () => {
   assert.match(html, /id="tableWrap"/);
   assert.match(html, /ResizeObserver/);
   assert.match(html, /html,body\{height:100%;overflow:hidden/);
+  assert.match(html, /body\{margin:0;padding:6px;/);
+  assert.match(html, /\.cards\{display:grid;grid-template-columns:minmax\(0,2fr\) minmax\(0,1fr\)/);
+  assert.match(html, /\.card\{display:grid;grid-template-columns:repeat\(4,minmax\(0,1fr\)\)/);
+  assert.match(html, /\.toolbar\{display:flex;gap:5px;flex-wrap:nowrap/);
   assert.doesNotMatch(html, /max-height:70vh/);
   assert.match(html, /输入序列坐标采用 1-based 闭区间/);
   assert.doesNotMatch(html, /themeDialog|themeButton|data-theme-choice|localStorage/);
@@ -100,26 +106,36 @@ test('CSV has an Excel UTF-8 BOM and pending product count stays blank', () => {
   assert.equal(csv.charCodeAt(0), 0xFEFF);
   assert.match(csv, /a\.p3\.01/);
   const pendingLine = csv.split('\r\n').find((line) => line.includes('a.p3.02'));
-  assert.match(pendingLine, /待验证,,/);
+  const pendingCells = pendingLine.split(',');
+  assert.equal(pendingCells[BATCH_TABLE_HEADERS.indexOf('product_count')], '');
+  assert.equal(pendingCells[BATCH_TABLE_HEADERS.indexOf('validation_classification')], '待验证');
   const tsv = renderBatchTsv({ batch, candidates: candidates.slice(0, 1), results });
   assert.equal(tsv.split('\r\n')[0].split('\t').length, tsv.split('\r\n')[1].split('\t').length);
 });
 
-test('normalized report rows preserve display name, score type, and contig class', () => {
+test('normalized report rows contain only the requested final-report columns', () => {
   const [row] = buildBatchRows({ batch, candidates: candidates.slice(0, 1), results });
-  assert.equal(row.displayName, '样本 A <script>');
-  assert.equal(row.scoreType, 'Primer3 penalty');
-  assert.match(row.validationProducts, /primary/);
-  assert.equal(row.genomicProductLengths, '100');
-  assert.equal(row.genomicProductLocations, 'chr1:1-100');
+  assert.deepEqual(BATCH_TABLE_HEADERS, [
+    'sequence_id', 'display_name', 'candidate_id', 'rank', 'forward_primer', 'reverse_primer',
+    'F_start_end', 'R_start_end', 'genomic_pcr_length', 'design_length', 'product_count',
+    'validation_classification', 'input_length', 'genomic_product_locations', 'assembly',
+    'forward_tm', 'reverse_tm', 'forward_gc', 'reverse_gc', 'score',
+    'genomic_product_classes', 'validation_products', 'warnings',
+  ]);
+  assert.deepEqual(Object.keys(row), BATCH_TABLE_HEADERS);
+  assert.equal(row.display_name, '样本 A <script>');
+  assert.match(row.validation_products, /primary/);
+  assert.equal(row.genomic_pcr_length, '100');
+  assert.equal(row.genomic_product_locations, 'chr1:1-100');
   assert.equal(Object.hasOwn(row, 'blatForwardHits'), false);
   assert.equal(Object.hasOwn(row, 'blatReviewStatus'), false);
-  assert.equal(row.forward_input_start_1based, 1);
-  assert.equal(row.forward_input_end_1based, 4);
-  assert.equal(row.reverse_input_start_1based, 97);
-  assert.equal(row.reverse_input_end_1based, 100);
+  assert.equal(Object.hasOwn(row, 'engine'), false);
+  assert.equal(Object.hasOwn(row, 'score_type'), false);
+  assert.equal(row.input_length, 100);
+  assert.equal(row.F_start_end, '1-4');
+  assert.equal(row.R_start_end, '97-100');
   assert.equal(row.warnings, '');
-  assert.ok(renderBatchCsv({ batch, candidates: candidates.slice(0, 1), results }).includes('genomic_product_lengths_bp'));
+  assert.ok(renderBatchCsv({ batch, candidates: candidates.slice(0, 1), results }).includes('genomic_pcr_length'));
 });
 
 test('multi-locus results keep the total count but display only the first five products', () => {
@@ -139,11 +155,11 @@ test('multi-locus results keep the total count but display only the first five p
   const html = renderBatchReport({ batch, candidates: candidates.slice(0, 1), results: multiResults });
 
   assert.equal(MAX_DISPLAYED_GENOMIC_PRODUCTS, 5);
-  assert.equal(row.validationProductCount, 7);
-  assert.equal(row.genomicProductLengthsBp.length, 5);
-  assert.match(row.genomicProductLocations, /chr5:401-450/);
-  assert.doesNotMatch(row.genomicProductLocations, /chr6:501-550|chr7:601-650/);
-  assert.match(row.genomicProductLocations, /仅显示前 5 个，共 7 个/);
+  assert.equal(row.product_count, 7);
+  assert.match(row.genomic_pcr_length, /^50; 51; 52; 53; 54;/);
+  assert.match(row.genomic_product_locations, /chr5:401-450/);
+  assert.doesNotMatch(row.genomic_product_locations, /chr6:501-550|chr7:601-650/);
+  assert.match(row.genomic_product_locations, /仅显示前 5 个，共 7 个/);
   for (const output of [csv, tsv, html]) {
     assert.match(output, /仅显示前 5 个/);
     assert.doesNotMatch(output, /chr6:501-550|chr7:601-650/);
@@ -160,19 +176,14 @@ test('template positions fail closed when Primer3 coordinates are missing, malfo
   ];
   for (const [candidate, warning] of cases) {
     const [row] = buildBatchRows({ batch, candidates: [candidate], results: {} });
-    assert.equal(row.forward_input_start_1based, '');
-    assert.equal(row.forward_input_end_1based, '');
-    assert.equal(row.reverse_input_start_1based, '');
-    assert.equal(row.reverse_input_end_1based, '');
+    assert.equal(row.F_start_end, '');
+    assert.equal(row.R_start_end, '');
     assert.match(row.warnings, new RegExp(warning));
   }
 });
 
-test('HTML, CSV, and TSV expose the same sortable 1-based input-template position columns', () => {
-  const positionHeaders = [
-    'forward_input_start_1based', 'forward_input_end_1based',
-    'reverse_input_start_1based', 'reverse_input_end_1based',
-  ];
+test('HTML, CSV, and TSV expose the same combined 1-based input-template intervals', () => {
+  const positionHeaders = ['F_start_end', 'R_start_end'];
   const csv = renderBatchCsv({ batch, candidates: candidates.slice(0, 1), results });
   const tsv = renderBatchTsv({ batch, candidates: candidates.slice(0, 1), results });
   const html = renderBatchReport({ batch, candidates: candidates.slice(0, 1), results });
@@ -183,7 +194,7 @@ test('HTML, CSV, and TSV expose the same sortable 1-based input-template positio
     assert.ok(tsvHeaders.includes(header));
     assert.match(html, new RegExp(`>${header}<`));
   }
-  assert.match(csv, /ACGT,1,4,TGCA,97,100,/);
+  assert.match(csv, /ACGT,TGCA,1-4,97-100,/);
   assert.equal(tsv.split('\r\n')[1].split('\t').length, tsvHeaders.length);
 });
 
@@ -199,8 +210,8 @@ test('derived batch results hide BLAT fields while preserving isPCR classificati
   for (const output of [csv, tsv, html]) {
     assert.doesNotMatch(output, /blat_forward_hits|blat_reverse_hits|blat_forward_full_length_exact|blat_reverse_full_length_exact|blat_review_status/i);
   }
-  assert.equal(row.classificationLabel, '唯一产物');
-  assert.equal(row.genomicProductLocations, 'chr1:1-100');
+  assert.equal(row.validation_classification, '唯一产物');
+  assert.equal(row.genomic_product_locations, 'chr1:1-100');
   assert.match(html, /唯一产物/);
   assert.match(html, /chr1:1-100/);
 });

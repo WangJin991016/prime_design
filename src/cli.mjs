@@ -33,7 +33,7 @@ async function loadConfig(configPath = defaultConfigPath) {
 }
 
 function printHelp() {
-  console.log(`prime-design 0.5.0
+  console.log(`prime-design 0.5.4
 
 批量命令：
   batch-prepare --fasta <multi.fasta> --manifest <batch.tsv> [--name 名称] [--out A:\\...]

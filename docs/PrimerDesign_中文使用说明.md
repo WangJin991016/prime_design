@@ -1,6 +1,6 @@
 # PrimerDesign 中文使用说明
 
-适用版本：`0.5.0`
+适用版本：`0.5.4`
 运行环境：Windows x64，本机个人使用  
 默认数据目录：`A:\CodexProject\prime_design`
 
@@ -226,13 +226,15 @@ FASTA 严格复核与批次快照
 3. 点击 **从断点重试** 或历史批次中的 **运行**；
 4. 软件会复用已确认的设计、验证结果和缓存，不重复已完成阶段。
 
+从 `0.5.1` 起，“检查服务器”还会执行验证脚本语法检查和内置查询校验自检。若批次曾冻结到 `0.5.0` 的已知故障脚本，首次手动重试时软件会先在 `raw/execution-upgrades` 保存原配置、失败作业和 resume 审计副本，只升级执行脚本哈希；Primer3 与所有生物学参数保持不变。
+
 ## 9. 查看和导出结果
 
 任务结束后可以：
 
 - 点击 **打开完整报告**：在新标签页打开 `report.html`；
-- 点击 **页面内预览**：按需打开全屏报告层，主页滚动会锁定；Esc 或“关闭”可退出；
-- 在完整报告中下载 `summary.csv`；
+- 点击 **页面内预览**：按需打开全屏报告层，主页滚动会锁定；报告顶部采用紧凑布局，让表格占用大部分视口；Esc 或“关闭”可退出；
+- 在完整报告中点击“下载 CSV”获取 `summary.csv`，或点击“下载原始 FASTA”获取本批实际用于 Primer3 设计的 `input.fasta`；
 - 使用 **复制全部**、**复制筛选结果** 或 **复制选中行**，将 TSV 直接粘贴到 Excel。
 
 完整报告支持按序列、assembly、验证结论和最大排名筛选；点击列标题可排序。
@@ -244,21 +246,21 @@ FASTA 严格复核与批次快照
 |---|---|
 | `sequence_id` | FASTA 标题中的内部 ID |
 | `display_name` | 预览时确认或修改的显示名称 |
-| `input_template_length_bp` | 输入 FASTA 长度 |
-| `assembly` | 本批参考基因组 |
 | `candidate_id` | 软件生成的候选唯一 ID |
-| `pair_rank` | Primer3 候选排名，1 为首选 |
+| `rank` | Primer3 候选排名，1 为首选 |
 | `forward_primer` / `reverse_primer` | 正反向引物，均以 5′→3′显示 |
-| `forward_input_start_1based` / `end` | 正向引物在输入 FASTA 中的 1-based 闭区间 |
-| `reverse_input_start_1based` / `end` | 反向引物在输入 FASTA 中的 1-based 闭区间，区间按模板坐标从小到大排列 |
+| `F_start_end` | 正向引物在输入 FASTA 中的 1-based 闭区间，格式为 `起点-终点` |
+| `R_start_end` | 反向引物在输入 FASTA 中的 1-based 闭区间，格式为 `起点-终点`；区间按模板坐标从小到大排列 |
+| `genomic_pcr_length` | 基因组 isPCR 产物长度；多位点时仅显示前 5 个 |
+| `design_length` | Primer3 在输入模板上的设计产物长度 |
+| `product_count` | 当前参数下找到的基因组产物总数 |
+| `validation_classification` | 基因组 isPCR 验证结论 |
+| `input_length` | 输入 FASTA 长度 |
+| `genomic_product_locations` | 基因组产物坐标；多位点时仅显示前 5 个 |
+| `assembly` | 本批参考基因组 |
 | `forward_tm` / `reverse_tm` | 正反向引物 Tm |
 | `forward_gc` / `reverse_gc` | 正反向引物 GC% |
-| `product_length_design` | Primer3 在输入模板上的设计产物长度 |
 | `score` | Primer3 pair penalty；通常越低越优 |
-| `validation_classification` | 基因组 isPCR 验证结论 |
-| `validation_product_count` | 当前参数下找到的基因组产物总数 |
-| `genomic_product_lengths_bp` | 基因组产物长度；多位点时仅显示前 5 个 |
-| `genomic_product_locations` | 基因组产物坐标；多位点时仅显示前 5 个 |
 | `genomic_product_classes` | primary、alt/fix 或其他 contig 类型 |
 | `validation_products` | 坐标、长度和 contig 类型的组合说明 |
 | `warnings` | 模板坐标、工具或验证异常信息 |

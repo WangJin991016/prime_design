@@ -249,6 +249,7 @@ function renderSystemCheck(local, remote = null) {
       : '存在缺失', remoteToolsReady],
     ['服务器部署清单', remote.provisionManifest ? '哈希一致' : '缺失或已变化', remote.provisionManifest],
     ['服务器验证脚本', remote.runScript ? '哈希一致' : '需要部署或已变化', remote.runScript],
+    ['验证脚本语法 / 自检', remote.runScriptSyntax && remote.runScriptSelfTest ? '通过' : '失败', remote.runScriptSyntax && remote.runScriptSelfTest],
     ['hs1 / hg38 / mm10', remoteGenomesReady ? '索引齐全' : '存在缺失', remoteGenomesReady],
   );
   const container = $('#systemChecks');
@@ -517,7 +518,18 @@ function renderStatus(status) {
     if (run.phase === 'verify') return '正在校验下载结果';
     if (run.phase === 'reporting') return '正在生成报告';
     if (run.phase === 'complete') return '验证完成';
-    if (run.phase === 'failed') return '服务器验证失败';
+    if (run.phase === 'failed') {
+      const reasons = {
+        preflight_missing_dependency: '服务器缺少验证输入、工具或部署清单',
+        completed_output_exists: '服务器运行目录已存在完成结果',
+        query_validation_failed: '候选引物查询文件校验失败',
+        integrity_check_failed: 'isPCR、BLAT 或基因组数据库完整性校验失败',
+        shard_failed: 'isPCR 并行分片运行失败',
+        output_validation_failed: '服务器结果文件校验失败',
+        remote_job_failed: '服务器验证作业失败',
+      };
+      return reasons[run.errorCode] || '服务器验证失败';
+    }
     return run.state || run.phase;
   })();
   const runDetail = run

@@ -113,6 +113,15 @@ async function remoteTest({ runner, connection, host, testArgs }) {
   }
 }
 
+async function remoteCommandSucceeds({ runner, connection, host, args }) {
+  try {
+    await runner('ssh', [...connection, host, ...args], { timeoutMs: 20_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function checkRemoteSystem({ config, runner = runProcess }) {
   const primer3Server = config?.primer3?.server || {};
   const validationServer = config?.ucsc?.isPcrServer || {};
@@ -121,6 +130,11 @@ export async function checkRemoteSystem({ config, runner = runProcess }) {
     throw new Error('Primer3 与 UCSC 验证配置使用了不同 SSH 主机。');
   }
   const root = safeRemoteRoot(validationServer.remoteRoot || primer3Server.remoteRoot);
+  const runScriptPath = String(validationServer.slurmScript || '');
+  if (!SAFE_REMOTE_PATH.test(runScriptPath) || runScriptPath.split('/').includes('..')
+    || !runScriptPath.startsWith(`${root}/jobs/`)) {
+    throw new Error('服务器验证脚本路径配置无效。');
+  }
   const connection = sshArgs({ ...validationServer, sshConfigPath: validationServer.sshConfigPath || primer3Server.sshConfigPath });
   let slurmVersion = '';
   try {
@@ -139,14 +153,18 @@ export async function checkRemoteSystem({ config, runner = runProcess }) {
       expected: validationServer.expectedProvisionManifestSha256,
     }),
     remoteHashMatches({
-      runner, connection, host, filePath: validationServer.slurmScript,
+      runner, connection, host, filePath: runScriptPath,
       expected: validationServer.expectedRunScriptSha256,
     }),
+    remoteCommandSucceeds({ runner, connection, host, args: ['bash', '-n', runScriptPath] }),
+    remoteCommandSucceeds({ runner, connection, host, args: ['bash', runScriptPath, '--self-test'] }),
   ]);
   const [primer3, isPcr, blat, ...tail] = checks;
   const assemblies = tail.slice(0, REQUIRED_ASSEMBLIES.length);
-  const provisionManifest = tail.at(-2);
-  const runScript = tail.at(-1);
+  const provisionManifest = tail.at(-4);
+  const runScript = tail.at(-3);
+  const runScriptSyntax = tail.at(-2);
+  const runScriptSelfTest = tail.at(-1);
   const assemblyStatus = Object.fromEntries(REQUIRED_ASSEMBLIES.map((assembly, index) => [assembly, assemblies[index]]));
   return {
     checkedAt: new Date().toISOString(),
@@ -160,9 +178,11 @@ export async function checkRemoteSystem({ config, runner = runProcess }) {
     },
     provisionManifest,
     runScript,
+    runScriptSyntax,
+    runScriptSelfTest,
     assemblies: assemblyStatus,
     ready: Boolean(slurmVersion) && primer3 && isPcr && blat
-      && provisionManifest && runScript && assemblies.every(Boolean),
+      && provisionManifest && runScript && runScriptSyntax && runScriptSelfTest && assemblies.every(Boolean),
   };
 }
 
